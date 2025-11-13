@@ -33,14 +33,6 @@ pub fn encode(src: &[u8]) -> Vec<u8> {
     // Write the varint-encoded length of the decompressed bytes
     let d = encode_varint(&mut dst, src.len() as u64);
 
-    eprintln!(
-        "DEBUG encode: src.len()={}, max_len={}, varint_bytes={}, available={}",
-        src.len(),
-        max_len,
-        d,
-        max_len - d
-    );
-
     if src.is_empty() {
         dst.truncate(d);
         return dst;
@@ -242,8 +234,14 @@ pub fn max_encoded_len(src_len: usize) -> Result<usize> {
     let literal_extra = literal_extra_size(src_len as i64) as usize;
     n += literal_extra;
 
-    eprintln!("DEBUG max_encoded_len: src_len={}, bits_needed={}, varint_extra={}, literal_extra={}, total={}",
-              src_len, bits_needed, varint_extra, literal_extra, n);
+    // Add safety margin for compression metadata overhead.
+    // During compression attempts, multiple literals and copy operations
+    // may be emitted before deciding compression isn't worthwhile,
+    // consuming extra space beyond the single-literal assumption.
+    // We add src_len/32 bytes to account for this overhead, which aligns
+    // with the compression worthiness threshold in encode_block.
+    let safety_margin = src_len / 32 + 1;
+    n += safety_margin;
 
     #[cfg(target_pointer_width = "32")]
     {
@@ -321,12 +319,6 @@ fn emit_literal(dst: &mut [u8], lit: &[u8]) -> usize {
 
     // Bounds check before copying
     if i + lit.len() > dst.len() {
-        eprintln!("DEBUG emit_literal FAIL:");
-        eprintln!("  lit.len() = {}", lit.len());
-        eprintln!("  n = lit.len() - 1 = {}", n);
-        eprintln!("  header size i = {}", i);
-        eprintln!("  need = i + lit.len() = {}", i + lit.len());
-        eprintln!("  have = dst.len() = {}", dst.len());
         panic!(
             "emit_literal: insufficient dst space: need {}, have {}",
             i + lit.len(),
