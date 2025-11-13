@@ -525,7 +525,7 @@ mod tests {
         } // Drop applies index
 
         // Should have index appended
-        assert!(compressed.len() > 0);
+        assert!(!compressed.is_empty());
 
         // Check for index trailer
         let trailer = b"\x00xdi2s";
@@ -546,7 +546,7 @@ mod tests {
         } // Drop applies index
 
         // Should have index appended
-        assert!(compressed.len() > 0);
+        assert!(!compressed.is_empty());
 
         // Check for index trailer - search from end
         let trailer = b"\x00xdi2s";
