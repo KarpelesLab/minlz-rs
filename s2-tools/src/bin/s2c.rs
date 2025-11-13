@@ -5,7 +5,7 @@
 use anyhow::{Context, Result};
 use clap::Parser;
 use indicatif::{ProgressBar, ProgressStyle};
-use minlz::{encode, encode_best, encode_better, ConcurrentWriter, Reader, Writer};
+use minlz::{decode, encode, encode_best, encode_better, ConcurrentWriter, Reader, Writer};
 use std::fs::{self, File};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
@@ -106,11 +106,6 @@ fn main() -> Result<()> {
     } else {
         1
     };
-
-    // Check for unsupported features
-    if args.recomp {
-        eprintln!("Warning: --recomp is not yet implemented");
-    }
 
     // Parse block size
     let block_size = parse_size(&args.blocksize).context("Invalid block size")?;
@@ -293,21 +288,67 @@ fn compress_file(input_path: &str, args: &Args, block_size: usize, pad_size: usi
     let mut input_file = File::open(&input)
         .with_context(|| format!("Failed to open input file: {}", input.display()))?;
 
-    if args.block {
-        // Block mode: read all into memory
+    // Handle recompression if requested
+    let data_to_compress: Vec<u8> = if args.recomp {
+        // Try to decompress the input file first
+        let mut compressed_data = Vec::new();
+        input_file.read_to_end(&mut compressed_data)?;
+
+        // Try to decompress as S2/Snappy stream format first
+        let mut decompressed = Vec::new();
+        let mut reader = Reader::new(&compressed_data[..]);
+        match reader.read_to_end(&mut decompressed) {
+            Ok(_) => {
+                if !args.quiet {
+                    eprintln!("Recompressing (decompressed {} bytes)", decompressed.len());
+                }
+                decompressed
+            }
+            Err(_) => {
+                // Try block format
+                match minlz::decode_snappy(&compressed_data) {
+                    Ok(decompressed) => {
+                        if !args.quiet {
+                            eprintln!("Recompressing Snappy block (decompressed {} bytes)", decompressed.len());
+                        }
+                        decompressed
+                    }
+                    Err(_) => {
+                        // Try S2 block format
+                        match decode(&compressed_data) {
+                            Ok(decompressed) => {
+                                if !args.quiet {
+                                    eprintln!("Recompressing S2 block (decompressed {} bytes)", decompressed.len());
+                                }
+                                decompressed
+                            }
+                            Err(e) => {
+                                anyhow::bail!("Failed to decompress input for recompression: {}", e);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    } else {
+        // Read normally
         let mut data = Vec::new();
         input_file.read_to_end(&mut data)?;
+        data
+    };
 
+    if args.block {
+        // Block mode: compress the data
         if let Some(ref pb) = pb {
-            pb.set_position(file_size);
+            pb.set_position(data_to_compress.len() as u64);
         }
 
         let compressed = if args.slower {
-            encode_best(&data)
+            encode_best(&data_to_compress)
         } else if args.faster {
-            encode(&data)
+            encode(&data_to_compress)
         } else {
-            encode_better(&data)
+            encode_better(&data_to_compress)
         };
 
         if output == Path::new("-") {
@@ -317,14 +358,19 @@ fn compress_file(input_path: &str, args: &Args, block_size: usize, pad_size: usi
                 .with_context(|| format!("Failed to create output file: {}", output.display()))?;
             output_file.write_all(&compressed)?;
         }
-    } else {
-        // Stream mode
+    } else if args.recomp {
+        // Stream mode with recompression - use in-memory data
+        if let Some(ref pb) = pb {
+            pb.set_position(data_to_compress.len() as u64);
+        }
+
         if output == Path::new("-") {
             let stdout = io::stdout();
             let mut stdout_lock = stdout.lock();
+            let mut reader = &data_to_compress[..];
 
             compress_stream(
-                &mut input_file,
+                &mut reader,
                 &mut stdout_lock,
                 args,
                 block_size,
@@ -334,9 +380,39 @@ fn compress_file(input_path: &str, args: &Args, block_size: usize, pad_size: usi
         } else {
             let mut output_file = File::create(&output)
                 .with_context(|| format!("Failed to create output file: {}", output.display()))?;
+            let mut reader = &data_to_compress[..];
 
             compress_stream(
-                &mut input_file,
+                &mut reader,
+                &mut output_file,
+                args,
+                block_size,
+                pad_size,
+                pb.as_ref(),
+            )?;
+        }
+    } else {
+        // Stream mode - read from file directly
+        if output == Path::new("-") {
+            let stdout = io::stdout();
+            let mut stdout_lock = stdout.lock();
+            let mut reader = &data_to_compress[..];
+
+            compress_stream(
+                &mut reader,
+                &mut stdout_lock,
+                args,
+                block_size,
+                pad_size,
+                pb.as_ref(),
+            )?;
+        } else {
+            let mut output_file = File::create(&output)
+                .with_context(|| format!("Failed to create output file: {}", output.display()))?;
+            let mut reader = &data_to_compress[..];
+
+            compress_stream(
+                &mut reader,
                 &mut output_file,
                 args,
                 block_size,
