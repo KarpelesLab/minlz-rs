@@ -26,7 +26,7 @@
 //! ```
 
 mod constants;
-mod crc;
+pub mod crc;
 mod decode;
 mod dict;
 mod encode;

@@ -8,20 +8,22 @@
 //! This implements the checksum specified in section 3 of
 //! https://github.com/google/snappy/blob/master/framing_format.txt
 
-use crc32fast::Hasher;
+use crc::{Crc, CRC_32_ISCSI};
+
+/// CRC-32C (Castagnoli) instance - same polynomial as used in iSCSI
+const CRC32C: Crc<u32> = Crc::<u32>::new(&CRC_32_ISCSI);
 
 /// Calculate the CRC32 checksum for S2 stream format
 ///
-/// This uses the Castagnoli polynomial and applies a transformation
+/// This uses the CRC-32C (Castagnoli) polynomial and applies a transformation
 /// as specified in the Snappy framing format.
 pub fn crc(data: &[u8]) -> u32 {
-    // crc32fast uses the Castagnoli polynomial by default
-    let mut hasher = Hasher::new();
-    hasher.update(data);
-    let c = hasher.finalize();
+    // Calculate CRC-32C checksum
+    let c = CRC32C.checksum(data);
 
     // Apply the transformation from the Snappy spec:
-    // return ((c >> 15) | (c << 17)) + 0xa282ead8
+    // Rotate right by 15 bits and add constant 0xa282ead8
+    // This is equivalent to: ((c >> 15) | (c << 17)) + 0xa282ead8
     c.rotate_right(15).wrapping_add(0xa282ead8)
 }
 

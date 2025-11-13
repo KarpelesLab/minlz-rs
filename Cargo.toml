@@ -12,7 +12,7 @@ name = "minlz"
 path = "src/lib.rs"
 
 [dependencies]
-crc32fast = "1.4"
+crc = "3.3.0"
 rayon = { version = "1.8", optional = true }
 
 [features]

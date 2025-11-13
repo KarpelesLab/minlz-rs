@@ -1,0 +1,25 @@
+[package]
+name = "s2-tools"
+version = "0.1.0"
+edition = "2021"
+authors = ["Karpeles Lab Inc."]
+description = "Command-line tools for S2 compression"
+license = "BSD-3-Clause"
+repository = "https://github.com/KarpelesLab/minlz-rs"
+
+[[bin]]
+name = "s2c"
+path = "src/bin/s2c.rs"
+
+[[bin]]
+name = "s2d"
+path = "src/bin/s2d.rs"
+
+[dependencies]
+minlz = { version = "0.1.1", path = "..", features = ["concurrent"] }
+clap = { version = "4", features = ["derive", "wrap_help"] }
+anyhow = "1"
+indicatif = "0.17"
+
+[dev-dependencies]
+tempfile = "3"
