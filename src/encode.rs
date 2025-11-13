@@ -256,11 +256,11 @@ fn literal_extra_size(n: i64) -> i64 {
     // Note: n is the literal LENGTH. The boundaries are conservative, returning
     // the next header size one position early to ensure sufficient buffer space.
     match n {
-        ..60 => 1,              // 0-59: header 1 byte (emitLiteral uses 1 byte for len 1-60)
-        60..256 => 2,           // 60-255: header 2 bytes (emitLiteral uses 2 bytes for len 61-256)
-        256..65536 => 3,        // 256-65535: header 3 bytes (emitLiteral uses 3 bytes for len 257-65536)
-        65536..16777216 => 4,   // 65536-16777215: header 4 bytes (emitLiteral uses 4 bytes for len 65537-16777216)
-        _ => 5,                 // >= 16777216: header 5 bytes
+        ..60 => 1,            // 0-59: header 1 byte (emitLiteral uses 1 byte for len 1-60)
+        60..256 => 2,         // 60-255: header 2 bytes (emitLiteral uses 2 bytes for len 61-256)
+        256..65536 => 3, // 256-65535: header 3 bytes (emitLiteral uses 3 bytes for len 257-65536)
+        65536..16777216 => 4, // 65536-16777215: header 4 bytes (emitLiteral uses 4 bytes for len 65537-16777216)
+        _ => 5,               // >= 16777216: header 5 bytes
     }
 }
 
