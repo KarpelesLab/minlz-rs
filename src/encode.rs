@@ -116,6 +116,41 @@ pub fn encode_best_with_dict(src: &[u8], _dict: &Dict) -> Vec<u8> {
     encode_best(src)
 }
 
+/// Encode using Snappy-compatible format (no repeat offsets)
+///
+/// This produces output compatible with the original Snappy format,
+/// which can be decompressed by both S2 and Snappy decoders.
+/// The encoding is less efficient than S2 as it doesn't use repeat offsets.
+pub fn encode_snappy(src: &[u8]) -> Vec<u8> {
+    let max_len = max_encoded_len(src.len()).expect("source too large");
+    let mut dst = vec![0u8; max_len];
+
+    // Write the varint-encoded length of the decompressed bytes
+    let d = encode_varint(&mut dst, src.len() as u64);
+
+    if src.is_empty() {
+        dst.truncate(d);
+        return dst;
+    }
+
+    if src.len() < MIN_NON_LITERAL_BLOCK_SIZE {
+        let n = emit_literal(&mut dst[d..], src);
+        dst.truncate(d + n);
+        return dst;
+    }
+
+    let n = encode_block_snappy(&mut dst[d..], src);
+    if n > 0 {
+        dst.truncate(d + n);
+        return dst;
+    }
+
+    // Not compressible
+    let n = emit_literal(&mut dst[d..], src);
+    dst.truncate(d + n);
+    dst
+}
+
 /// EncodeBest provides the best compression but is the slowest
 pub fn encode_best(src: &[u8]) -> Vec<u8> {
     let max_len = max_encoded_len(src.len()).expect("source too large");
@@ -1053,6 +1088,110 @@ fn encode_block_best(dst: &mut [u8], src: &[u8]) -> usize {
             return 0;
         }
         d += emit_literal(&mut dst[d..], &src[next_emit..]);
+    }
+
+    d
+}
+
+/// Encode a block using Snappy-compatible algorithm (no repeat offsets)
+///
+/// This is similar to encode_block but uses emit_copy_no_repeat instead of
+/// the S2 repeat offset optimization, making it compatible with Snappy decoders.
+fn encode_block_snappy(dst: &mut [u8], src: &[u8]) -> usize {
+    if src.len() < MIN_NON_LITERAL_BLOCK_SIZE {
+        return 0;
+    }
+
+    // Hash table size - use 14 bits like Snappy
+    const TABLE_BITS: u32 = 14;
+    const TABLE_SIZE: usize = 1 << TABLE_BITS;
+    let shift = 32 - TABLE_BITS;
+
+    let mut table = vec![0u32; TABLE_SIZE];
+
+    let s_limit = src.len() - INPUT_MARGIN;
+    let mut next_emit = 0;
+    let mut s = 1;
+    let mut d = 0;
+    #[allow(unused_assignments)]
+    let mut repeat = 1;
+
+    #[allow(unused_variables)]
+    let cv = load64(src, s);
+
+    'outer: loop {
+        let mut candidate;
+        let mut skip = 32;
+
+        loop {
+            let next_s = s + (skip >> 5);
+            skip += 1;
+
+            if next_s > s_limit {
+                break 'outer;
+            }
+
+            let h = hash(&src[s..], shift);
+            candidate = table[h] as usize;
+            table[h] = s as u32;
+
+            if load32(src, s) == load32(src, candidate) {
+                break;
+            }
+
+            s = next_s;
+        }
+
+        // Extend backwards
+        while candidate > 0 && s > next_emit && src[candidate - 1] == src[s - 1] {
+            candidate -= 1;
+            s -= 1;
+        }
+
+        // Emit literal
+        if s > next_emit {
+            d += emit_literal(&mut dst[d..], &src[next_emit..s]);
+        }
+
+        // Extend the match forward
+        let base = s;
+        repeat = base - candidate;
+        s += 4;
+        candidate += 4;
+
+        while s <= src.len() - 8 {
+            if load64(src, s) != load64(src, candidate) {
+                let diff = (load64(src, s) ^ load64(src, candidate)).trailing_zeros() / 8;
+                s += diff as usize;
+                break;
+            }
+            s += 8;
+            candidate += 8;
+        }
+
+        // Use emit_copy_no_repeat for Snappy compatibility (no repeat offset optimization)
+        d += emit_copy_no_repeat(&mut dst[d..], repeat, s - base);
+        next_emit = s;
+
+        if s >= s_limit {
+            break;
+        }
+
+        // Update hash table
+        let h1 = hash(&src[s - 1..], shift);
+        table[h1] = (s - 1) as u32;
+
+        s += 1;
+    }
+
+    // Emit remaining
+    if next_emit < src.len() {
+        d += emit_literal(&mut dst[d..], &src[next_emit..]);
+    }
+
+    // Check if compression was worthwhile
+    if d >= src.len() - src.len() / 32 {
+        return 0;
     }
 
     d

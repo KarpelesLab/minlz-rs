@@ -19,7 +19,7 @@ This document compares the Rust implementation (minlz) with the Go reference imp
 | Concurrent Writer | ✅ | ✅ | ✅ Complete | Parallel compression (optional feature) |
 | **Snappy Compatibility** |
 | Decode Snappy blocks | ✅ | ✅ | ✅ Complete | Can decompress Snappy data |
-| Encode Snappy blocks | ✅ | ❌ | ⚠️ Missing | Not commonly needed |
+| Encode Snappy blocks | ✅ | ✅ | ✅ Complete | encode_snappy() function |
 
 ## Advanced Features
 
@@ -38,12 +38,12 @@ This document compares the Rust implementation (minlz) with the Go reference imp
 | Reader seeking | ✅ | ❌ | ⚠️ Partial | Core index done, Reader integration pending |
 | **Writer Options** |
 | Block size control | ✅ | ✅ | ✅ Complete | Configurable via with_block_size() |
-| Padding | ✅ | ❌ | ❌ Missing | Low priority |
+| Padding | ✅ | ✅ | ✅ Complete | Writer::with_padding() |
 | Custom block size | ✅ | ✅ | ✅ Complete | Via with_block_size() |
 | Concurrency level | ✅ | ✅ | ✅ Complete | ConcurrentWriter::new(w, n) |
 | **Reader Options** |
 | Max block size | ✅ | ✅ | ✅ Complete | Reader::with_max_block_size() |
-| Alloc block size | ✅ | ❌ | ❌ Missing | Memory optimization (low priority) |
+| Alloc block size | ✅ | ✅ | ✅ Complete | Reader::with_alloc_block_size() |
 | Ignore stream ID | ✅ | ✅ | ✅ Complete | Reader::with_ignore_stream_id() |
 
 ## Format Conversion
@@ -97,10 +97,8 @@ This document compares the Rust implementation (minlz) with the Go reference imp
 - **Reader seeking**: Index structure complete, trait integration deferred
 
 ### ❌ Missing (Low Priority)
-- **Snappy block encoding**: Rarely needed (S2 is better)
 - **LZ4 converters**: Niche use case, ~1000 lines of code
-- **Writer padding**: Low priority optimization
-- **Reader alloc_block_size**: Memory optimization (nice-to-have)
+- **Reader seeking (io::Seek)**: In progress
 - **ErrCantSeek**: Would come with seeking support
 
 ## Recommendation

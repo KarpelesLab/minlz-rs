@@ -10,7 +10,7 @@
 #![allow(clippy::same_item_push)] // Intentional test pattern
 #![allow(clippy::manual_hash_one)] // Testing hash behavior explicitly
 
-use crate::{decode, encode, encode_best, encode_better, max_encoded_len};
+use crate::{decode, encode, encode_best, encode_better, encode_snappy, max_encoded_len};
 
 fn roundtrip(data: &[u8]) -> Result<(), String> {
     let original = data.to_vec();

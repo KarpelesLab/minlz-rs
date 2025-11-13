@@ -105,6 +105,32 @@ impl<R: Read> Reader<R> {
         }
     }
 
+    /// Create a new Reader with a pre-allocated buffer size
+    ///
+    /// This can reduce allocations if you know the expected block size.
+    /// The buffer will grow as needed if larger blocks are encountered.
+    ///
+    /// Note: The Rust implementation uses a different buffering strategy than
+    /// the Go implementation, so this primarily provides API compatibility.
+    ///
+    /// # Panics
+    /// Panics if alloc_block_size is less than 1KB or greater than 4MB
+    pub fn with_alloc_block_size(reader: R, alloc_block_size: usize) -> Self {
+        assert!(
+            alloc_block_size >= 1024 && alloc_block_size <= MAX_BLOCK_SIZE,
+            "alloc_block_size must be >= 1KB and <= 4MB"
+        );
+        Reader {
+            reader,
+            buf: Vec::with_capacity(alloc_block_size),
+            pos: 0,
+            read_header: false,
+            eof: false,
+            max_block_size: MAX_BLOCK_SIZE,
+            ignore_stream_id: false,
+        }
+    }
+
     /// Read and verify the stream identifier
     fn read_stream_identifier(&mut self) -> io::Result<()> {
         let mut magic = [0u8; MAGIC_CHUNK.len()];
@@ -422,5 +448,29 @@ mod tests {
         expected.extend_from_slice(data2);
 
         assert_eq!(decompressed, expected);
+    }
+
+    #[test]
+    fn test_reader_with_alloc_block_size() {
+        // Test with pre-allocated buffer
+        let data = b"Test data for alloc_block_size";
+        let mut compressed = Vec::new();
+        {
+            let mut writer = Writer::new(&mut compressed);
+            writer.write_all(data).unwrap();
+            writer.flush().unwrap();
+        }
+
+        let mut reader = Reader::with_alloc_block_size(&compressed[..], 4096);
+        let mut decompressed = Vec::new();
+        reader.read_to_end(&mut decompressed).unwrap();
+        assert_eq!(decompressed, data);
+    }
+
+    #[test]
+    #[should_panic(expected = "alloc_block_size must be >= 1KB and <= 4MB")]
+    fn test_reader_invalid_alloc_block_size() {
+        let data = &[0u8; 10][..];
+        let _reader = Reader::with_alloc_block_size(data, 512); // Too small
     }
 }
