@@ -21,3 +21,4 @@ Thumbs.db
 # Reference implementations (cloned repos)
 /go-s2/
 /compress/
+s2-tools/target/

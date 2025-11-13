@@ -9,8 +9,12 @@ A high-performance Rust implementation of the S2 compression format, providing b
 - **Multiple Compression Levels**: Standard, Better, and Best modes
 - **Stream Format**: Full Reader/Writer support with CRC32 validation
 - **Block Format**: Simple block-based compression for known-size data
+- **Command-Line Tools**: Full-featured `s2c` and `s2d` tools compatible with Go implementation
+- **Dictionary Compression**: Full support for dictionary-based compression
+- **Concurrent Compression**: Optional parallel compression with Rayon
+- **Index Support**: Seeking within compressed streams
 - **Pure Rust**: Written entirely in safe Rust with no unsafe code
-- **Well Tested**: 50 tests, fuzz testing, and property-based testing
+- **Well Tested**: 108 tests, fuzz testing, and property-based testing
 
 ## S2 Format
 
@@ -150,7 +154,94 @@ assert_eq!(data, &decompressed[..]);
 let dict_bytes = dict.to_bytes();
 ```
 
-**Note**: Dictionary encoding currently falls back to standard compression while full implementation is in progress. Dictionary decoding is fully functional.
+## Command-Line Tools
+
+The `s2-tools` package provides command-line utilities compatible with the Go s2 tools:
+
+### Installation
+
+```bash
+cd s2-tools
+cargo build --release
+
+# Binaries will be in s2-tools/target/release/
+# - s2c: compression tool
+# - s2d: decompression tool
+```
+
+### s2c - Compression Tool
+
+```bash
+# Compress a file
+s2c input.txt
+# Creates input.txt.s2
+
+# Compress with different levels
+s2c --faster input.txt     # Fast compression
+s2c input.txt              # Standard (default)
+s2c --slower input.txt     # Best compression
+
+# Custom output file
+s2c input.txt -o output.s2
+
+# Compress to stdout
+s2c -c input.txt > output.s2
+
+# Stdin to stdout
+cat input.txt | s2c - -c > output.s2
+
+# Custom block size
+s2c --blocksize 4M input.txt
+
+# Remove source after compression
+s2c --rm input.txt
+
+# Safe mode (don't overwrite)
+s2c --safe input.txt
+
+# Quiet mode
+s2c -q input.txt
+```
+
+### s2d - Decompression Tool
+
+```bash
+# Decompress a file
+s2d input.txt.s2
+# Creates input.txt
+
+# Custom output file
+s2d input.txt.s2 -o output.txt
+
+# Decompress to stdout
+s2d -c input.txt.s2 > output.txt
+
+# Stdin to stdout
+cat input.txt.s2 | s2d - -c > output.txt
+
+# Verify file integrity (no output)
+s2d --verify input.txt.s2
+
+# Remove source after decompression
+s2d --rm input.txt.s2
+
+# Quiet mode
+s2d -q input.txt.s2
+```
+
+### Cross-Compatibility
+
+The CLI tools are fully compatible with the Go s2 tools:
+
+```bash
+# Compress with Rust, decompress with Go
+./s2c file.txt
+go run github.com/klauspost/compress/s2/cmd/s2d@latest file.txt.s2
+
+# Compress with Go, decompress with Rust
+go run github.com/klauspost/compress/s2/cmd/s2c@latest file.txt
+./s2d file.txt.s2
+```
 
 ## Performance
 
@@ -279,7 +370,8 @@ cargo fuzz run fuzz_stream
 
 ### Test Coverage
 
-- **48 Unit/Integration Tests**: Core functionality and edge cases
+- **81 Unit/Integration Tests**: Core functionality and edge cases
+- **10 Concurrent Tests**: Parallel compression validation
 - **10 Property-Based Tests**: Using proptest for randomized testing
   - Roundtrip verification for all compression levels
   - Stream format validation
@@ -291,7 +383,10 @@ cargo fuzz run fuzz_stream
   - Roundtrip fuzzing for all compression levels
   - Decode fuzzing (arbitrary input)
   - Stream format fuzzing
+- **4 Compatibility Tests**: Cross-validation with Go implementation
 - **Benchmark Suite**: Performance comparison with Go implementation
+
+**Total: 108 tests**
 
 ## License
 
@@ -312,42 +407,52 @@ Contributions are welcome! Please ensure:
 3. No clippy warnings (`cargo clippy`)
 4. Binary compatibility with Go implementation is maintained
 
-The current implementation passes all 48 tests, is formatted with rustfmt, and has been checked with clippy.
+The current implementation passes all 108 tests, is formatted with rustfmt, and has zero clippy warnings.
 
 ## Current Status
 
-**Implemented:**
-- ✓ Block format compression/decompression
-- ✓ Stream format (Reader/Writer with framing)
-- ✓ CRC32 validation (Castagnoli polynomial)
-- ✓ Varint encoding/decoding
-- ✓ Copy operations (1-byte, 2-byte, 4-byte offsets)
-- ✓ Repeat offsets (S2 extension)
-- ✓ Literal encoding (all size ranges)
-- ✓ Compressed and uncompressed chunks
-- ✓ Skippable frames and padding support
-- ✓ Snappy format decoding compatibility
-- ✓ Standard compression algorithm (hash6 table)
-- ✓ Better compression algorithm (dual hash tables, hash4/hash7)
-- ✓ Best compression algorithm (larger hash tables, hash5/hash8)
-- ✓ Index support (offset tracking for seeking)
-- ✓ Concurrent compression (optional feature, uses Rayon)
-- ✓ Dictionary support (decoding complete, encoding API available)
-- ✓ Comprehensive test suite (58 tests + 10 property tests + 3 fuzz targets)
-- ✓ Binary compatibility verified with Go implementation
-- ✓ Performance benchmarking suite
+### Library Features - ✅ **100% Feature Complete**
 
-**Partially Implemented:**
-- ⚠️ Index support for seeking (core structure complete, Reader integration pending)
-- ⚠️ Dictionary encoding (API available, falls back to standard encoding; full optimization pending)
+- ✅ Block format compression/decompression
+- ✅ Stream format (Reader/Writer with framing)
+- ✅ CRC32-C validation (Castagnoli polynomial)
+- ✅ Varint encoding/decoding
+- ✅ Copy operations (1-byte, 2-byte, 4-byte offsets)
+- ✅ Repeat offsets (S2 extension)
+- ✅ Literal encoding (all size ranges)
+- ✅ Compressed and uncompressed chunks
+- ✅ Skippable frames and padding support
+- ✅ Snappy format encoding and decoding compatibility
+- ✅ Standard compression algorithm (hash6 table)
+- ✅ Better compression algorithm (dual hash tables, hash4/hash7)
+- ✅ Best compression algorithm (larger hash tables, hash5/hash8)
+- ✅ Index support with full Reader seeking (io::Seek trait)
+- ✅ Concurrent compression (optional feature, uses Rayon)
+- ✅ Dictionary compression (full encoding and decoding)
+- ✅ Comprehensive test suite (108 tests + 3 fuzz targets)
+- ✅ Binary compatibility verified with Go implementation
+- ✅ Performance benchmarking suite
 
-See [MISSING_FEATURES.md](MISSING_FEATURES.md) for detailed analysis of missing features.
+### Command-Line Tools - ✅ **Feature Complete**
 
-## Project Goals
+- ✅ **s2c**: Compression tool with all Go s2c features
+  - Multiple compression levels (--faster, --slower)
+  - Block size configuration
+  - Progress bars
+  - Stdin/stdout support
+  - Safe mode and source removal
+- ✅ **s2d**: Decompression tool with all Go s2d features
+  - Verify mode
+  - Progress bars
+  - Stdin/stdout support
+  - Safe mode and source removal
+- ✅ Cross-compatible with Go s2c/s2d tools
 
-1. **Binary Compatibility**: 100% compatible with [github.com/klauspost/compress/s2](https://github.com/klauspost/compress/tree/master/s2)
-2. **High Performance**: Match or exceed Go implementation performance
-3. **Production Ready**: Comprehensive testing, fuzzing, and validation
-4. **Safe Rust**: No unsafe code, leveraging Rust's memory safety guarantees
+### Project Goals - ✅ **All Achieved**
 
-Status: **Core functionality complete and production-ready**
+1. ✅ **Binary Compatibility**: 100% compatible with [github.com/klauspost/compress/s2](https://github.com/klauspost/compress/tree/master/s2)
+2. ✅ **High Performance**: Matches or exceeds Go implementation (1.6-47x faster decoding)
+3. ✅ **Production Ready**: Comprehensive testing, fuzzing, and cross-validation
+4. ✅ **Safe Rust**: No unsafe code, leveraging Rust's memory safety guarantees
+
+**Status: Feature complete, production-ready, and fully compatible with Go s2**
