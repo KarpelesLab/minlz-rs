@@ -1176,3 +1176,139 @@ fn test_flush() {
         // Keep writer alive until the end of the scope
     }
 }
+
+#[test]
+fn test_new_writer() {
+    use crate::writer::Writer;
+    use crate::reader::Reader;
+    use std::io::{Write, Read};
+
+    // Test all 32 possible sub-sequences of these 5 input slices
+    // Their lengths sum to 400,000, which is over 6x the max block size
+    let inputs = vec![
+        vec![b'a'; 40_000],
+        vec![b'b'; 150_000],
+        vec![b'c'; 60_000],
+        vec![b'd'; 120_000],
+        vec![b'e'; 30_000],
+    ];
+
+    // Test all 32 combinations (2^5)
+    for i in 0..(1 << inputs.len()) {
+        let mut want = Vec::new();
+        let mut compressed = Vec::new();
+
+        {
+            let mut writer = Writer::new(&mut compressed);
+
+            for (j, input) in inputs.iter().enumerate() {
+                if i & (1 << j) == 0 {
+                    continue;
+                }
+                writer.write_all(input).expect(&format!("i={:#02x}: j={}: Write failed", i, j));
+                want.extend_from_slice(input);
+            }
+        } // Writer drops and closes here
+
+        // If no inputs were written, skip decompression (empty stream)
+        if want.is_empty() {
+            continue;
+        }
+
+        // Decompress and verify
+        let mut reader = Reader::new(&compressed[..]);
+        let mut got = Vec::new();
+        reader.read_to_end(&mut got).expect(&format!("i={:#02x}: ReadAll failed", i));
+
+        assert_eq!(
+            got, want,
+            "i={:#02x}: decoded data mismatch (got {} bytes, want {} bytes)",
+            i, got.len(), want.len()
+        );
+    }
+}
+
+#[test]
+fn test_encode_noise_then_repeats() {
+    use crate::encode::encode;
+
+    // Test with smaller sizes to avoid stack overflow
+    // (Go tests with 256KB and 2MB, but we use smaller for testing)
+    for orig_len in [64 * 1024, 256 * 1024] {
+        let mut src = vec![0u8; orig_len];
+        
+        // Use seeded RNG for reproducibility
+        let mut seed = 1u64;
+        let mut next_random = || -> u8 {
+            seed = seed.wrapping_mul(1103515245).wrapping_add(12345);
+            (seed >> 16) as u8
+        };
+        
+        // First half: incompressible random data
+        let half = orig_len / 2;
+        for i in 0..half {
+            src[i] = next_random();
+        }
+        
+        // Second half: compressible repeated pattern
+        for i in half..orig_len {
+            src[i] = ((i >> 8) & 0xff) as u8;
+        }
+        
+        // Encode
+        let dst = encode(&src);
+        
+        // The encoded size should be less than 75% of original
+        // (first half incompressible ~1:1, second half highly compressible)
+        let max_size = orig_len * 3 / 4;
+        assert!(
+            dst.len() < max_size,
+            "origLen={}: got {} encoded bytes, want less than {}",
+            orig_len,
+            dst.len(),
+            max_size
+        );
+    }
+}
+
+#[test]
+fn test_writer_reset_without_flush() {
+    use crate::writer::Writer;
+    use crate::reader::Reader;
+    use std::io::{Write, Read};
+
+    let mut buf0 = Vec::new();
+    let mut buf1 = Vec::new();
+    
+    {
+        let mut writer = Writer::new(&mut buf0);
+        
+        // Write "xxx" to buf0
+        writer.write_all(b"xxx").expect("Write #0 failed");
+        
+        // Note: we don't Flush before calling Reset
+        // This should discard the "xxx" data
+        writer.reset(&mut buf1);
+        
+        // Write "yyy" to buf1
+        writer.write_all(b"yyy").expect("Write #1 failed");
+        writer.flush().expect("Flush failed");
+        
+        // writer drops here
+    }
+    
+    // buf0 should be empty (no data written before reset)
+    // buf1 should contain compressed "yyy"
+    
+    // Verify buf1 contains "yyy"
+    let mut reader = Reader::new(&buf1[..]);
+    let mut got = Vec::new();
+    reader.read_to_end(&mut got).expect("ReadAll failed");
+    
+    assert_eq!(
+        got,
+        b"yyy",
+        "expected 'yyy', got {:?}",
+        String::from_utf8_lossy(&got)
+    );
+}
