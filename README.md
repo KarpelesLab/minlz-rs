@@ -175,12 +175,24 @@ Contributions are welcome! Please ensure:
 3. No clippy warnings (`cargo clippy`)
 4. Binary compatibility with Go implementation is maintained
 
+## Current Status
+
+**Implemented:**
+- ✓ Block format compression/decompression
+- ✓ Varint encoding/decoding
+- ✓ Basic copy operations
+- ✓ Literal encoding
+
+**Missing (for full Go s2 compatibility):**
+- ✗ Stream format (Reader/Writer with framing)
+- ✗ CRC validation
+- ✗ Dictionary support
+- ✗ Index support for seeking
+- ✗ Snappy decoding compatibility
+- ✗ Better/Best compression algorithms (API exists but uses same implementation as standard)
+- ✗ Stream concatenation
+- ✗ Padding and uncompressed stream modes
+
 ## Roadmap
 
-- [ ] Stream format support
-- [ ] CRC validation
-- [ ] Dictionary compression
-- [ ] Index support for seeking
-- [ ] Snappy compatibility mode
-- [ ] Performance optimizations (SIMD)
-- [ ] Benchmarking suite
+The goal is full binary compatibility with [github.com/klauspost/compress/s2](https://github.com/klauspost/compress/s2).
