@@ -1027,3 +1027,152 @@ fn test_leading_skippable_block() {
         String::from_utf8_lossy(&decoded)
     );
 }
+
+#[test]
+fn test_framing_format() {
+    use crate::writer::Writer;
+    use crate::reader::Reader;
+    use std::io::{Write, Read};
+
+    // Create 1MB source with alternating incompressible and compressible sequences
+    // Each sequence is 100KB (1e5 bytes), larger than maxBlockSize (64KB)
+    const CHUNK_SIZE: usize = 100_000;
+    let mut src = vec![0u8; CHUNK_SIZE * 10];
+    
+    // Use a seeded RNG for reproducibility
+    let mut seed = 1u64;
+    let mut next_random = || -> u8 {
+        seed = seed.wrapping_mul(1103515245).wrapping_add(12345);
+        (seed >> 16) as u8
+    };
+
+    for i in 0..10 {
+        let start = CHUNK_SIZE * i;
+
+        if i % 2 == 0 {
+            // Incompressible: random bytes
+            for j in 0..CHUNK_SIZE {
+                src[start + j] = next_random();
+            }
+        } else {
+            // Compressible: repeated bytes
+            for j in 0..CHUNK_SIZE {
+                src[start + j] = i as u8;
+            }
+        }
+    }
+    
+    // Encode
+    let mut compressed = Vec::new();
+    {
+        let mut writer = Writer::new(&mut compressed);
+        writer.write_all(&src).expect("write failed");
+    }
+    
+    // Decode
+    let mut reader = Reader::new(&compressed[..]);
+    let mut decoded = Vec::new();
+    reader.read_to_end(&mut decoded).expect("read failed");
+    
+    // Verify
+    assert_eq!(
+        decoded.len(),
+        src.len(),
+        "decoded length mismatch: got {}, want {}",
+        decoded.len(),
+        src.len()
+    );
+    assert_eq!(decoded, src, "decoded data does not match source");
+}
+
+#[test]
+fn test_framing_format_better() {
+    use crate::writer::Writer;
+    use crate::reader::Reader;
+    use std::io::{Write, Read};
+
+    // Same test as test_framing_format, but with "better" compression
+    // (Our implementation doesn't have compression levels yet, so this is the same)
+    
+    const CHUNK_SIZE: usize = 100_000;
+    let mut src = vec![0u8; CHUNK_SIZE * 10];
+
+    let mut seed = 1u64;
+    let mut next_random = || -> u8 {
+        seed = seed.wrapping_mul(1103515245).wrapping_add(12345);
+        (seed >> 16) as u8
+    };
+
+    for i in 0..10 {
+        let start = CHUNK_SIZE * i;
+
+        if i % 2 == 0 {
+            for j in 0..CHUNK_SIZE {
+                src[start + j] = next_random();
+            }
+        } else {
+            for j in 0..CHUNK_SIZE {
+                src[start + j] = i as u8;
+            }
+        }
+    }
+    
+    // Encode (would use WriterBetterCompression if we had compression levels)
+    let mut compressed = Vec::new();
+    {
+        let mut writer = Writer::new(&mut compressed);
+        writer.write_all(&src).expect("write failed");
+    }
+    
+    // Decode
+    let mut reader = Reader::new(&compressed[..]);
+    let mut decoded = Vec::new();
+    reader.read_to_end(&mut decoded).expect("read failed");
+    
+    // Verify
+    assert_eq!(
+        decoded.len(),
+        src.len(),
+        "decoded length mismatch: got {}, want {}",
+        decoded.len(),
+        src.len()
+    );
+    assert_eq!(decoded, src, "decoded data does not match source");
+}
+
+#[test]
+fn test_flush() {
+    use crate::writer::Writer;
+    use std::io::Write;
+
+    let mut buf = Vec::new();
+    {
+        let mut writer = Writer::new(&mut buf);
+
+        // Write 20 'x' bytes
+        let data = vec![b'x'; 20];
+        writer.write_all(&data).expect("write failed");
+
+        // Before flush, nothing should be written yet (data is buffered)
+        let len_before = writer.get_ref().len();
+        assert_eq!(
+            len_before,
+            0,
+            "before Flush: {} bytes were written to the underlying writer, want 0",
+            len_before
+        );
+
+        // Flush
+        writer.flush().expect("flush failed");
+
+        // After flush, data should be written
+        let len_after = writer.get_ref().len();
+        assert!(
+            len_after > 0,
+            "after Flush: {} bytes were written to the underlying writer, want non-0",
+            len_after
+        );
+
+        // Keep writer alive until the end of the scope
+    }
+}
