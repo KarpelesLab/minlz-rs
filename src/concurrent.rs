@@ -176,7 +176,6 @@ impl<W: Write> Drop for ConcurrentWriter<W> {
 #[cfg(feature = "concurrent")]
 mod tests {
     use super::*;
-    use crate::decode::decode;
 
     #[test]
     fn test_concurrent_writer_basic() {
@@ -189,7 +188,7 @@ mod tests {
         }
 
         // Should be able to decompress
-        assert!(compressed.len() > 0);
+        assert!(!compressed.is_empty());
 
         // Decode using Reader to handle stream format
         use crate::Reader;
