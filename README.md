@@ -35,6 +35,15 @@ Add this to your `Cargo.toml`:
 minlz = "0.1"
 ```
 
+### Optional Features
+
+Enable concurrent compression for improved performance on multi-core systems:
+
+```toml
+[dependencies]
+minlz = { version = "0.1", features = ["concurrent"] }
+```
+
 ## Usage
 
 ### Block Format (Simple Compression)
@@ -99,6 +108,23 @@ let compressed_better = encode_better(data);
 
 // Best compression (slowest)
 let compressed_best = encode_best(data);
+```
+
+### Concurrent Compression (Optional Feature)
+
+Enable the `concurrent` feature for parallel compression on multi-core systems:
+
+```rust
+use minlz::ConcurrentWriter;
+use std::io::Write;
+
+let mut compressed = Vec::new();
+{
+    // Compress with 4 concurrent workers
+    let mut writer = ConcurrentWriter::new(&mut compressed, 4);
+    writer.write_all(&large_data)?;
+    writer.flush()?;
+}
 ```
 
 ## Performance
@@ -280,7 +306,8 @@ The current implementation passes all 48 tests, is formatted with rustfmt, and h
 - ✓ Better compression algorithm (dual hash tables, hash4/hash7)
 - ✓ Best compression algorithm (larger hash tables, hash5/hash8)
 - ✓ Index support (offset tracking for seeking)
-- ✓ Comprehensive test suite (50 tests + 10 property tests + 3 fuzz targets)
+- ✓ Concurrent compression (optional feature, uses Rayon)
+- ✓ Comprehensive test suite (53 tests + 10 property tests + 3 fuzz targets)
 - ✓ Binary compatibility verified with Go implementation
 - ✓ Performance benchmarking suite
 
@@ -289,7 +316,6 @@ The current implementation passes all 48 tests, is formatted with rustfmt, and h
 
 **Not Yet Implemented:**
 - ✗ Dictionary support (LOW priority - rarely used)
-- ✗ Concurrent compression (LOW-MEDIUM priority)
 
 See [MISSING_FEATURES.md](MISSING_FEATURES.md) for detailed analysis of missing features.
 

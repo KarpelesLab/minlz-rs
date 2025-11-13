@@ -35,12 +35,18 @@ mod reader;
 mod varint;
 mod writer;
 
+#[cfg(feature = "concurrent")]
+mod concurrent;
+
 pub use decode::{decode, decode_len, decode_snappy, Decoder};
 pub use encode::{encode, encode_best, encode_better, max_encoded_len, Encoder};
 pub use error::{Error, Result};
 pub use index::Index;
 pub use reader::Reader;
 pub use writer::Writer;
+
+#[cfg(feature = "concurrent")]
+pub use concurrent::ConcurrentWriter;
 
 #[cfg(test)]
 mod tests;
