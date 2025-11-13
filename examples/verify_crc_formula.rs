@@ -7,18 +7,14 @@ fn main() {
     let c = CRC32C.checksum(data);
     println!("Raw CRC32C: 0x{:08x}", c);
 
-    let manual = ((c >> 15) | (c << 17)).wrapping_add(0xa282ead8);
-    println!("Manual bit ops: 0x{:08x}", manual);
-
-    let rotate = c.rotate_right(15).wrapping_add(0xa282ead8);
-    println!("Rotate right: 0x{:08x}", rotate);
+    let result = c.rotate_right(15).wrapping_add(0xa282ead8);
+    println!("Transformed CRC: 0x{:08x}", result);
 
     println!("\nExpected from Go: 0x668b4327");
 
-    if manual == 0x668b4327 {
-        println!("✓ Manual bit ops is CORRECT");
-    }
-    if rotate == 0x668b4327 {
-        println!("✓ Rotate right is CORRECT");
+    if result == 0x668b4327 {
+        println!("✓ CRC transformation is CORRECT");
+    } else {
+        println!("✗ CRC transformation is INCORRECT");
     }
 }

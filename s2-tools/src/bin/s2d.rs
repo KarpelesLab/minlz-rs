@@ -132,10 +132,10 @@ fn decompress_file(input_path: &str, args: &Args) -> Result<()> {
     } else {
         // Remove .s2 or .sz extension
         let path_str = input.to_string_lossy();
-        if path_str.ends_with(".s2") {
-            PathBuf::from(&path_str[..path_str.len() - 3])
-        } else if path_str.ends_with(".sz") {
-            PathBuf::from(&path_str[..path_str.len() - 3])
+        if let Some(stripped) = path_str.strip_suffix(".s2") {
+            PathBuf::from(stripped)
+        } else if let Some(stripped) = path_str.strip_suffix(".sz") {
+            PathBuf::from(stripped)
         } else {
             anyhow::bail!("Input file must have .s2 or .sz extension: {}", input.display());
         }
