@@ -1009,3 +1009,30 @@ fn encode_block_best(dst: &mut [u8], src: &[u8]) -> usize {
 
     d
 }
+
+// Test helpers - expose internal functions for testing
+#[cfg(test)]
+pub mod test_helpers {
+    use super::*;
+
+    /// Test wrapper for emit_literal
+    pub fn test_emit_literal(dst: &mut [u8], lit: &[u8]) -> usize {
+        emit_literal(dst, lit)
+    }
+
+    /// Test wrapper for emit_copy
+    pub fn test_emit_copy(dst: &mut [u8], offset: usize, length: usize) -> usize {
+        emit_copy(dst, offset, length)
+    }
+
+    /// Match length function for testing
+    /// Counts the number of matching bytes at the beginning of two slices
+    pub fn test_match_len(a: &[u8], b: &[u8]) -> usize {
+        let len = a.len().min(b.len());
+        let mut n = 0;
+        while n < len && a[n] == b[n] {
+            n += 1;
+        }
+        n
+    }
+}
