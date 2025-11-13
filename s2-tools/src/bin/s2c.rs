@@ -5,7 +5,7 @@
 use anyhow::{Context, Result};
 use clap::Parser;
 use indicatif::{ProgressBar, ProgressStyle};
-use minlz::{encode, encode_better, encode_best, Writer};
+use minlz::{encode, encode_best, encode_better, Writer};
 use std::fs::{self, File};
 use std::io::{self, Read, Write};
 use std::path::PathBuf;
@@ -77,8 +77,7 @@ fn main() -> Result<()> {
     }
 
     // Parse block size
-    let block_size = parse_size(&args.blocksize)
-        .context("Invalid block size")?;
+    let block_size = parse_size(&args.blocksize).context("Invalid block size")?;
 
     // Handle stdin/stdout case
     if args.files.len() == 1 && args.files[0] == "-" {
@@ -142,12 +141,11 @@ fn compress_file(input_path: &str, args: &Args, block_size: usize) -> Result<()>
         PathBuf::from("-")
     } else {
         let ext = if args.snappy { ".sz" } else { ".s2" };
-        input.with_extension(
-            format!("{}{}",
-                input.extension().and_then(|s| s.to_str()).unwrap_or(""),
-                ext
-            )
-        )
+        input.with_extension(format!(
+            "{}{}",
+            input.extension().and_then(|s| s.to_str()).unwrap_or(""),
+            ext
+        ))
     };
 
     // Check if output exists in safe mode
@@ -251,8 +249,12 @@ fn compress_file(input_path: &str, args: &Args, block_size: usize) -> Result<()>
 
         if output_size > 0 {
             let ratio = (output_size as f64 / file_size as f64) * 100.0;
-            println!("{} -> {} ({:.2}%)",
-                input.display(), output.display(), ratio);
+            println!(
+                "{} -> {} ({:.2}%)",
+                input.display(),
+                output.display(),
+                ratio
+            );
         }
     }
 

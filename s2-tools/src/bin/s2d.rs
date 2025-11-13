@@ -124,7 +124,7 @@ fn decompress_file(input_path: &str, args: &Args) -> Result<()> {
 
     // Determine output path
     let output = if args.verify {
-        PathBuf::from("-")  // Don't write anything in verify mode
+        PathBuf::from("-") // Don't write anything in verify mode
     } else if let Some(ref out) = args.output {
         out.clone()
     } else if args.stdout {
@@ -137,7 +137,10 @@ fn decompress_file(input_path: &str, args: &Args) -> Result<()> {
         } else if let Some(stripped) = path_str.strip_suffix(".sz") {
             PathBuf::from(stripped)
         } else {
-            anyhow::bail!("Input file must have .s2 or .sz extension: {}", input.display());
+            anyhow::bail!(
+                "Input file must have .s2 or .sz extension: {}",
+                input.display()
+            );
         }
     };
 
@@ -174,8 +177,7 @@ fn decompress_file(input_path: &str, args: &Args) -> Result<()> {
             pb.set_position(file_size);
         }
 
-        let decompressed = decode(&data)
-            .context("Decompression failed")?;
+        let decompressed = decode(&data).context("Decompression failed")?;
 
         if args.verify {
             if !args.quiet {
@@ -251,8 +253,12 @@ fn decompress_file(input_path: &str, args: &Args) -> Result<()> {
 
         if output_size > 0 {
             let ratio = (file_size as f64 / output_size as f64) * 100.0;
-            println!("{} -> {} (compressed to {:.2}%)",
-                input.display(), output.display(), ratio);
+            println!(
+                "{} -> {} (compressed to {:.2}%)",
+                input.display(),
+                output.display(),
+                ratio
+            );
         }
     }
 

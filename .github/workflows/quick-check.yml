@@ -39,3 +39,23 @@ jobs:
 
       - name: Run clippy
         run: cargo clippy --all-targets -- -D warnings
+
+      - name: Build s2-tools
+        run: |
+          cd s2-tools
+          cargo build --verbose
+
+      - name: Test s2-tools
+        run: |
+          cd s2-tools
+          cargo test --verbose
+
+      - name: Check s2-tools formatting
+        run: |
+          cd s2-tools
+          cargo fmt --all -- --check
+
+      - name: Run clippy on s2-tools
+        run: |
+          cd s2-tools
+          cargo clippy --all-targets -- -D warnings
