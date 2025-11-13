@@ -154,19 +154,24 @@ cargo run --example debug
 
 ## Block vs Stream Format
 
-This library currently implements the **block format**, which is suitable for:
+This library implements **both formats**:
 
+### Block Format
+Suitable for:
 - Data of known size
 - In-memory compression
 - Simple use cases
+- Maximum compression speed
 
-The block format does not include:
+### Stream Format
+Includes:
+- ✓ CRC32 validation (Castagnoli polynomial)
+- ✓ Chunk framing with magic headers
+- ✓ Full streaming support via Reader/Writer
+- ✓ Incremental reading/writing
+- ✓ Compatible with Go s2.Reader/Writer
 
-- CRC validation
-- Chunk framing
-- Streaming support
-
-For streaming compression with CRC validation, the stream format would be needed (not yet implemented).
+Use stream format for file I/O, network streaming, or when you need data integrity validation.
 
 ## Testing
 
