@@ -1,7 +1,6 @@
 // Copyright 2024 Karpeles Lab Inc.
 // Dictionary support for S2 compression
 
-use crate::error::Result;
 use crate::varint::{decode_varint, encode_varint, varint_size};
 
 /// Minimum dictionary size
@@ -24,10 +23,16 @@ pub struct Dict {
     repeat: usize,
 
     // Hash tables for different compression levels (lazy initialized)
+    // These will be used when full dictionary encoding is implemented
+    #[allow(dead_code)]
     fast_table: Option<Box<[u16; 1 << 14]>>,
+    #[allow(dead_code)]
     better_table_short: Option<Box<[u16; 1 << 14]>>,
+    #[allow(dead_code)]
     better_table_long: Option<Box<[u16; 1 << 17]>>,
+    #[allow(dead_code)]
     best_table_short: Option<Box<[u32; 1 << 16]>>,
+    #[allow(dead_code)]
     best_table_long: Option<Box<[u32; 1 << 19]>>,
 }
 
@@ -90,6 +95,7 @@ impl Dict {
     }
 
     /// Get fast hash table, initializing if needed
+    #[allow(dead_code)]
     pub(crate) fn get_fast_table(&mut self) -> &[u16; 1 << 14] {
         if self.fast_table.is_none() {
             self.init_fast();
@@ -98,6 +104,7 @@ impl Dict {
     }
 
     /// Get better hash tables, initializing if needed
+    #[allow(dead_code)]
     pub(crate) fn get_better_tables(&mut self) -> (&[u16; 1 << 14], &[u16; 1 << 17]) {
         if self.better_table_short.is_none() || self.better_table_long.is_none() {
             self.init_better();
@@ -109,6 +116,7 @@ impl Dict {
     }
 
     /// Get best hash tables, initializing if needed
+    #[allow(dead_code)]
     pub(crate) fn get_best_tables(&mut self) -> (&[u32; 1 << 16], &[u32; 1 << 19]) {
         if self.best_table_short.is_none() || self.best_table_long.is_none() {
             self.init_best();
@@ -243,7 +251,8 @@ pub fn make_dict(data: &[u8], search_start: Option<&[u8]>) -> Option<Dict> {
 pub fn make_dict_manual(data: &[u8], first_idx: u16) -> Option<Dict> {
     if data.len() < MIN_DICT_SIZE
         || data.len() > MAX_DICT_SIZE
-        || first_idx as usize >= data.len().saturating_sub(8) {
+        || first_idx as usize >= data.len().saturating_sub(8)
+    {
         return None;
     }
 
@@ -268,6 +277,8 @@ fn find_last_occurrence(haystack: &[u8], needle: &[u8]) -> Option<usize> {
         return None;
     }
 
+    // Manual implementation is clearer than iterator chaining for this case
+    #[allow(clippy::manual_find)]
     for i in (0..=haystack.len() - needle.len()).rev() {
         if &haystack[i..i + needle.len()] == needle {
             return Some(i);
@@ -277,27 +288,33 @@ fn find_last_occurrence(haystack: &[u8], needle: &[u8]) -> Option<usize> {
 }
 
 // Helper functions for loading and hashing (matching encode.rs patterns)
+// These will be used when full dictionary encoding is implemented
 
+#[allow(dead_code)]
 #[inline(always)]
 fn load64(data: &[u8], offset: usize) -> u64 {
     u64::from_le_bytes(data[offset..offset + 8].try_into().unwrap())
 }
 
+#[allow(dead_code)]
 #[inline(always)]
 fn hash4(v: u64, bits: u32) -> u32 {
     ((v.wrapping_mul(0x1e35a7bd)) >> (32 - bits)) as u32
 }
 
+#[allow(dead_code)]
 #[inline(always)]
 fn hash6(v: u64, bits: u32) -> u32 {
     ((v.wrapping_mul(0xcf1bbcdcb7a56463)) >> (64 - bits)) as u32
 }
 
+#[allow(dead_code)]
 #[inline(always)]
 fn hash7(v: u64, bits: u32) -> u32 {
     ((v.wrapping_mul(0xcf1bbcdcb7a56463)) >> (64 - bits)) as u32
 }
 
+#[allow(dead_code)]
 #[inline(always)]
 fn hash8(v: u64, bits: u32) -> u32 {
     ((v.wrapping_mul(0x1e35a7bd1e35a7bd)) >> (64 - bits)) as u32

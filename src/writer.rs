@@ -38,8 +38,8 @@ pub struct Writer<W: Write> {
     buf: Vec<u8>,
     block_size: usize,
     wrote_header: bool,
-    padding: usize,      // If > 1, pad output to be a multiple of this value
-    total_written: u64,  // Total bytes written to underlying writer (for padding calculation)
+    padding: usize,     // If > 1, pad output to be a multiple of this value
+    total_written: u64, // Total bytes written to underlying writer (for padding calculation)
 }
 
 impl<W: Write> Writer<W> {
@@ -86,8 +86,10 @@ impl<W: Write> Writer<W> {
     /// assert_eq!(compressed.len() % 1024, 0);
     /// ```
     pub fn with_padding(writer: W, padding: usize) -> Self {
-        assert!(padding > 1 && padding <= MAX_BLOCK_SIZE,
-            "padding must be > 1 and <= 4MB");
+        assert!(
+            padding > 1 && padding <= MAX_BLOCK_SIZE,
+            "padding must be > 1 and <= 4MB"
+        );
 
         Writer {
             writer,
@@ -207,7 +209,10 @@ impl<W: Write> Writer<W> {
         if total >= MAX_BLOCK_SIZE + SKIPPABLE_FRAME_HEADER {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
-                format!("skippable frame size ({}) >= max ({})", total, MAX_BLOCK_SIZE),
+                format!(
+                    "skippable frame size ({}) >= max ({})",
+                    total, MAX_BLOCK_SIZE
+                ),
             ));
         }
 
@@ -239,10 +244,8 @@ impl<W: Write> Writer<W> {
     /// Apply padding if needed (called on close/drop)
     fn apply_padding(&mut self) -> io::Result<()> {
         if self.padding > 1 {
-            let padding_needed = Self::calc_skippable_frame(
-                self.total_written,
-                self.padding as u64,
-            );
+            let padding_needed =
+                Self::calc_skippable_frame(self.total_written, self.padding as u64);
 
             if padding_needed > 0 {
                 self.write_skippable_frame(padding_needed)?;

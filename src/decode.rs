@@ -318,7 +318,8 @@ fn s2_decode_dict(dst: &mut [u8], src: &[u8], dict: &Dict) -> Result<()> {
                         return Err(Error::Corrupt);
                     }
 
-                    dst[d..d + length].copy_from_slice(&dict.data()[dict_start..dict_start + length]);
+                    dst[d..d + length]
+                        .copy_from_slice(&dict.data()[dict_start..dict_start + length]);
                 } else {
                     // Copy from earlier in dst
                     copy_within(dst, d, offset, length);
@@ -350,7 +351,8 @@ fn s2_decode_dict(dst: &mut [u8], src: &[u8], dict: &Dict) -> Result<()> {
                         return Err(Error::Corrupt);
                     }
 
-                    dst[d..d + length].copy_from_slice(&dict.data()[dict_start..dict_start + length]);
+                    dst[d..d + length]
+                        .copy_from_slice(&dict.data()[dict_start..dict_start + length]);
                 } else {
                     copy_within(dst, d, offset, length);
                 }
@@ -382,7 +384,8 @@ fn s2_decode_dict(dst: &mut [u8], src: &[u8], dict: &Dict) -> Result<()> {
                         return Err(Error::Corrupt);
                     }
 
-                    dst[d..d + length].copy_from_slice(&dict.data()[dict_start..dict_start + length]);
+                    dst[d..d + length]
+                        .copy_from_slice(&dict.data()[dict_start..dict_start + length]);
                 } else {
                     copy_within(dst, d, offset, length);
                 }
@@ -437,7 +440,8 @@ fn s2_decode_dict(dst: &mut [u8], src: &[u8], dict: &Dict) -> Result<()> {
                         return Err(Error::Corrupt);
                     }
 
-                    dst[d..d + length].copy_from_slice(&dict.data()[dict_start..dict_start + length]);
+                    dst[d..d + length]
+                        .copy_from_slice(&dict.data()[dict_start..dict_start + length]);
                 } else {
                     copy_within(dst, d, offset, length);
                 }
@@ -468,7 +472,8 @@ fn s2_decode_dict(dst: &mut [u8], src: &[u8], dict: &Dict) -> Result<()> {
                         return Err(Error::Corrupt);
                     }
 
-                    dst[d..d + length].copy_from_slice(&dict.data()[dict_start..dict_start + length]);
+                    dst[d..d + length]
+                        .copy_from_slice(&dict.data()[dict_start..dict_start + length]);
                 } else {
                     copy_within(dst, d, offset, length);
                 }
@@ -500,7 +505,8 @@ fn s2_decode_dict(dst: &mut [u8], src: &[u8], dict: &Dict) -> Result<()> {
                         return Err(Error::Corrupt);
                     }
 
-                    dst[d..d + length].copy_from_slice(&dict.data()[dict_start..dict_start + length]);
+                    dst[d..d + length]
+                        .copy_from_slice(&dict.data()[dict_start..dict_start + length]);
                 } else {
                     copy_within(dst, d, offset, length);
                 }

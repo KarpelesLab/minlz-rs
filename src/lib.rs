@@ -40,7 +40,9 @@ mod writer;
 mod concurrent;
 
 pub use decode::{decode, decode_len, decode_snappy, decode_with_dict, Decoder};
-pub use dict::{make_dict, make_dict_manual, Dict, MAX_DICT_SIZE, MAX_DICT_SRC_OFFSET, MIN_DICT_SIZE};
+pub use dict::{
+    make_dict, make_dict_manual, Dict, MAX_DICT_SIZE, MAX_DICT_SRC_OFFSET, MIN_DICT_SIZE,
+};
 pub use encode::{
     encode, encode_best, encode_best_with_dict, encode_better, encode_better_with_dict,
     encode_snappy, encode_with_dict, max_encoded_len, Encoder,

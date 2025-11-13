@@ -351,7 +351,7 @@ impl Index {
 
         // Read compressed offsets
         let mut c_predict = self.est_block_uncomp / 2;
-        for i in 0..entries {
+        for (i, &uncomp_off) in uncomp_offsets.iter().enumerate() {
             let (v, n) = decode_varint(b)?;
             b = &b[n..];
             let comp_off = if i == 0 {
@@ -364,7 +364,7 @@ impl Index {
 
             self.info.push(IndexEntry {
                 compressed_offset: comp_off,
-                uncompressed_offset: uncomp_offsets[i],
+                uncompressed_offset: uncomp_off,
             });
         }
 

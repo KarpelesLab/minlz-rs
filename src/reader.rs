@@ -117,7 +117,7 @@ impl<R: Read> Reader<R> {
     /// Panics if alloc_block_size is less than 1KB or greater than 4MB
     pub fn with_alloc_block_size(reader: R, alloc_block_size: usize) -> Self {
         assert!(
-            alloc_block_size >= 1024 && alloc_block_size <= MAX_BLOCK_SIZE,
+            (1024..=MAX_BLOCK_SIZE).contains(&alloc_block_size),
             "alloc_block_size must be >= 1KB and <= 4MB"
         );
         Reader {
@@ -133,6 +133,11 @@ impl<R: Read> Reader<R> {
 
     /// Read and verify the stream identifier
     fn read_stream_identifier(&mut self) -> io::Result<()> {
+        // If ignore_stream_id is set, skip verification
+        if self.ignore_stream_id {
+            return Ok(());
+        }
+
         let mut magic = [0u8; MAGIC_CHUNK.len()];
         self.reader.read_exact(&mut magic)?;
 
@@ -218,6 +223,18 @@ impl<R: Read> Reader<R> {
             io::Error::new(io::ErrorKind::InvalidData, format!("decode error: {}", e))
         })?;
 
+        // Check against max_block_size limit
+        if decompressed.len() > self.max_block_size {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "decompressed block size ({}) exceeds limit ({})",
+                    decompressed.len(),
+                    self.max_block_size
+                ),
+            ));
+        }
+
         // Verify CRC
         let actual_crc = crc(&decompressed);
         if actual_crc != expected_crc {
@@ -245,6 +262,18 @@ impl<R: Read> Reader<R> {
 
         // Read uncompressed data
         let data_len = chunk_len - CHECKSUM_SIZE;
+
+        // Check against max_block_size limit
+        if data_len > self.max_block_size {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "uncompressed block size ({}) exceeds limit ({})",
+                    data_len, self.max_block_size
+                ),
+            ));
+        }
+
         let mut data = vec![0u8; data_len];
         self.reader.read_exact(&mut data)?;
 
