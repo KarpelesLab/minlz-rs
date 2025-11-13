@@ -457,7 +457,7 @@ fn encode_block(dst: &mut [u8], src: &[u8]) -> usize {
     let mut repeat = 1;
 
     #[allow(unused_variables)]
-    let mut cv = load64(src, s);
+    let cv = load64(src, s);
 
     'outer: loop {
         let mut candidate;
@@ -480,7 +480,6 @@ fn encode_block(dst: &mut [u8], src: &[u8]) -> usize {
             }
 
             s = next_s;
-            cv = load64(src, s);
         }
 
         // Extend backwards
@@ -518,11 +517,9 @@ fn encode_block(dst: &mut [u8], src: &[u8]) -> usize {
         }
 
         // Update hash table
-        let x = load64(src, s - 1);
         let h1 = hash(&src[s - 1..], shift);
         table[h1] = (s - 1) as u32;
 
-        cv = x >> 8;
         s += 1;
     }
 
@@ -769,13 +766,25 @@ fn emit_copy(dst: &mut [u8], offset: usize, length: usize) -> usize {
 
     // Offset no more than 2 bytes
     if length > 64 {
-        // Emit a length 60 copy, encoded as 3 bytes
-        dst[0] = ((59 << 2) | TAG_COPY2 as usize) as u8;
-        dst[1] = offset as u8;
-        dst[2] = (offset >> 8) as u8;
-        let remaining = length - 60;
-        // Emit remaining
-        return 3 + emit_copy(&mut dst[3..], offset, remaining);
+        let off;
+        let remaining_length;
+        if offset < 2048 {
+            // emit 8 bytes as tagCopy1, rest as repeats.
+            dst[0] = (((offset >> 8) << 5) | ((8 - 4) << 2) | TAG_COPY1 as usize) as u8;
+            dst[1] = offset as u8;
+            remaining_length = length - 8;
+            off = 2;
+        } else {
+            // Emit a length 60 copy, encoded as 3 bytes.
+            // Emit remaining as repeat value (minimum 4 bytes).
+            dst[0] = ((59 << 2) | TAG_COPY2 as usize) as u8;
+            dst[1] = offset as u8;
+            dst[2] = (offset >> 8) as u8;
+            remaining_length = length - 60;
+            off = 3;
+        }
+        // Emit remaining as repeats, at least 4 bytes remain.
+        return off + emit_repeat(&mut dst[off..], offset, remaining_length);
     }
 
     if length >= 12 || offset >= 2048 {

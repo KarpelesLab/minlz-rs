@@ -21,13 +21,14 @@ fn test_round_trip_all_levels() {
     for (name, data) in test_cases {
         // Test Standard compression
         let compressed = encode(&data);
-        let decompressed = decode(&compressed).expect(&format!("{}: standard decode failed", name));
+        let decompressed =
+            decode(&compressed).unwrap_or_else(|_| panic!("{}: standard decode failed", name));
         assert_eq!(data, decompressed, "{}: standard round-trip failed", name);
 
         // Test Better compression
         let compressed_better = encode_better(&data);
-        let decompressed_better =
-            decode(&compressed_better).expect(&format!("{}: better decode failed", name));
+        let decompressed_better = decode(&compressed_better)
+            .unwrap_or_else(|_| panic!("{}: better decode failed", name));
         assert_eq!(
             data, decompressed_better,
             "{}: better round-trip failed",
@@ -37,7 +38,7 @@ fn test_round_trip_all_levels() {
         // Test Best compression
         let compressed_best = encode_best(&data);
         let decompressed_best =
-            decode(&compressed_best).expect(&format!("{}: best decode failed", name));
+            decode(&compressed_best).unwrap_or_else(|_| panic!("{}: best decode failed", name));
         assert_eq!(data, decompressed_best, "{}: best round-trip failed", name);
 
         // Verify compression improves (or stays same for small data)
@@ -137,7 +138,7 @@ fn test_incompressible_data() {
 #[test]
 fn test_edge_cases() {
     // Test various edge cases
-    let edge_cases = vec![
+    let edge_cases = [
         vec![0u8; 0],     // Empty
         vec![0u8; 1],     // Single byte
         vec![0u8; 15],    // Just below MIN_NON_LITERAL_BLOCK_SIZE
@@ -149,7 +150,8 @@ fn test_edge_cases() {
 
     for (i, data) in edge_cases.iter().enumerate() {
         let compressed = encode(data);
-        let decompressed = decode(&compressed).expect(&format!("edge case {} failed", i));
+        let decompressed =
+            decode(&compressed).unwrap_or_else(|_| panic!("edge case {} failed", i));
         assert_eq!(data, &decompressed, "edge case {} mismatch", i);
     }
 }
@@ -184,7 +186,8 @@ fn test_literal_sizes() {
     for size in test_cases {
         let data = vec![b'x'; size];
         let compressed = encode(&data);
-        let decompressed = decode(&compressed).expect(&format!("literal size {} failed", size));
+        let decompressed =
+            decode(&compressed).unwrap_or_else(|_| panic!("literal size {} failed", size));
         assert_eq!(data, decompressed, "literal size {} mismatch", size);
     }
 }

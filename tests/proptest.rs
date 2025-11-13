@@ -37,7 +37,7 @@ proptest! {
     #[test]
     fn prop_stream_roundtrip(data: Vec<u8>) {
         prop_assume!(data.len() <= 100_000);
-        prop_assume!(data.len() > 0); // Skip empty data for stream test
+        prop_assume!(!data.is_empty()); // Skip empty data for stream test
 
         let mut compressed = Vec::new();
         {

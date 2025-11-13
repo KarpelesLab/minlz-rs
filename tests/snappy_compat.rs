@@ -31,7 +31,6 @@ fn test_snappy_stream_reader() {
     snappy_stream.push(0x00);
 
     // Chunk length: 3 bytes little-endian + CRC
-    let data = b"Test";
     let compressed_data = vec![
         0x04, // varint: 4 bytes uncompressed
         0x0c, // literal, 3 bytes
@@ -63,16 +62,6 @@ fn test_snappy_stream_reader() {
 #[test]
 fn test_snappy_with_copies() {
     // Test Snappy format with copy operations (but no repeat offsets)
-    // This is actual output from the Go snappy library
-    let data = vec![
-        0x0f, // varint: 15 bytes uncompressed
-        0x28, // literal, 10 bytes (0x0a << 2 | 0x00)
-        b'a', b'b', b'c', b'd', b'e', b'a', b'b', b'c', b'd', b'e', 0x0e, 0x05,
-        0x00, // copy2: length=4 (3+1), offset=5 - copy "abcd"
-        0x05, 0x09, // copy1: length=1 (1-4+4=1? no...), offset=9
-    ];
-
-    // Let's use a simpler, verified test case
     // Just test that basic copy operations work
     let simple_data = vec![
         0x09, // varint: 9 bytes uncompressed

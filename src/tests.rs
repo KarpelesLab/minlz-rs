@@ -3,13 +3,20 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+// Clippy allows for test code that matches Go reference patterns
+#![allow(clippy::useless_vec)] // Tests use vec! to match Go test patterns
+#![allow(clippy::expect_fun_call)] // Test assertions with dynamic messages
+#![allow(clippy::needless_range_loop)] // Test loops mirror Go patterns for clarity
+#![allow(clippy::same_item_push)] // Intentional test pattern
+#![allow(clippy::manual_hash_one)] // Testing hash behavior explicitly
+
 use crate::{decode, encode, encode_best, encode_better, max_encoded_len};
 
 fn roundtrip(data: &[u8]) -> Result<(), String> {
     let original = data.to_vec();
 
     // Test standard encoding
-    let encoded = encode(&data);
+    let encoded = encode(data);
     let decoded = decode(&encoded).map_err(|e| format!("decode error: {}", e))?;
 
     if decoded != original {
@@ -21,7 +28,7 @@ fn roundtrip(data: &[u8]) -> Result<(), String> {
     }
 
     // Test better encoding
-    let encoded_better = encode_better(&data);
+    let encoded_better = encode_better(data);
     let decoded_better =
         decode(&encoded_better).map_err(|e| format!("decode better error: {}", e))?;
 
@@ -34,7 +41,7 @@ fn roundtrip(data: &[u8]) -> Result<(), String> {
     }
 
     // Test best encoding
-    let encoded_best = encode_best(&data);
+    let encoded_best = encode_best(data);
     let decoded_best = decode(&encoded_best).map_err(|e| format!("decode best error: {}", e))?;
 
     if decoded_best != original {
@@ -407,7 +414,7 @@ fn test_slow_forward_copy_overrun() {
 
             // Literal: BASE bytes of 'x'
             if BASE <= 60 {
-                input_buf.push(0x00 + 4 * ((BASE - 1) as u8));
+                input_buf.push(4 * ((BASE - 1) as u8));
             } else if BASE <= 256 {
                 input_buf.push(0xf0);
                 input_buf.push((BASE - 1) as u8);
@@ -423,7 +430,7 @@ fn test_slow_forward_copy_overrun() {
             // Copy with small offset (overlapping)
             // Use tagCopy1 for lengths 4-11 with small offsets
             // Use tagCopy2 for other cases
-            if length >= 4 && length <= 11 && offset < 2048 {
+            if (4..=11).contains(&length) && offset < 2048 {
                 input_buf.push(0x01 + 4 * ((length - 4) as u8));
                 input_buf.push((offset & 0xff) as u8);
             } else {
@@ -627,7 +634,7 @@ fn test_emit_literal() {
 fn test_emit_copy() {
     use crate::encode::test_helpers::test_emit_copy;
 
-    // Test cases from Go implementation
+    // Test cases from Go implementation - all 59 test vectors
     let test_cases = vec![
         // offset=8 cases
         (8, 4, vec![0x01, 0x08]),
@@ -640,6 +647,14 @@ fn test_emit_copy() {
         (8, 62, vec![0xf6, 0x08, 0x00]),
         (8, 63, vec![0xfa, 0x08, 0x00]),
         (8, 64, vec![0xfe, 0x08, 0x00]),
+        (8, 65, vec![0x11, 0x08, 0x15, 0x00, 0x31]),
+        (8, 66, vec![0x11, 0x08, 0x15, 0x00, 0x32]),
+        (8, 67, vec![0x11, 0x08, 0x15, 0x00, 0x33]),
+        (8, 68, vec![0x11, 0x08, 0x15, 0x00, 0x34]),
+        (8, 69, vec![0x11, 0x08, 0x15, 0x00, 0x35]),
+        (8, 80, vec![0x11, 0x08, 0x15, 0x00, 0x40]),
+        (8, 800, vec![0x11, 0x08, 0x19, 0x00, 0x14, 0x02]),
+        (8, 800000, vec![0x11, 0x08, 0x1d, 0x00, 0xf4, 0x34, 0x0b]),
         // offset=256 cases
         (256, 4, vec![0x21, 0x00]),
         (256, 11, vec![0x3d, 0x00]),
@@ -651,6 +666,14 @@ fn test_emit_copy() {
         (256, 62, vec![0xf6, 0x00, 0x01]),
         (256, 63, vec![0xfa, 0x00, 0x01]),
         (256, 64, vec![0xfe, 0x00, 0x01]),
+        (256, 65, vec![0x31, 0x00, 0x15, 0x00, 0x31]),
+        (256, 66, vec![0x31, 0x00, 0x15, 0x00, 0x32]),
+        (256, 67, vec![0x31, 0x00, 0x15, 0x00, 0x33]),
+        (256, 68, vec![0x31, 0x00, 0x15, 0x00, 0x34]),
+        (256, 69, vec![0x31, 0x00, 0x15, 0x00, 0x35]),
+        (256, 80, vec![0x31, 0x00, 0x15, 0x00, 0x40]),
+        (256, 800, vec![0x31, 0x00, 0x19, 0x00, 0x14, 0x02]),
+        (256, 80000, vec![0x31, 0x00, 0x1d, 0x00, 0x74, 0x38, 0x00]),
         // offset=2048 cases (tagCopy2 - 3 bytes)
         (2048, 4, vec![0x0e, 0x00, 0x08]),
         (2048, 11, vec![0x2a, 0x00, 0x08]),
@@ -662,6 +685,20 @@ fn test_emit_copy() {
         (2048, 62, vec![0xf6, 0x00, 0x08]),
         (2048, 63, vec![0xfa, 0x00, 0x08]),
         (2048, 64, vec![0xfe, 0x00, 0x08]),
+        (2048, 65, vec![0xee, 0x00, 0x08, 0x05, 0x00]),
+        (2048, 66, vec![0xee, 0x00, 0x08, 0x09, 0x00]),
+        (2048, 67, vec![0xee, 0x00, 0x08, 0x0d, 0x00]),
+        (2048, 68, vec![0xee, 0x00, 0x08, 0x11, 0x00]),
+        (2048, 69, vec![0xee, 0x00, 0x08, 0x15, 0x00, 0x01]),
+        (2048, 80, vec![0xee, 0x00, 0x08, 0x15, 0x00, 0x0c]),
+        (2048, 800, vec![0xee, 0x00, 0x08, 0x19, 0x00, 0xe0, 0x01]),
+        (2048, 80000, vec![0xee, 0x00, 0x08, 0x1d, 0x00, 0x40, 0x38, 0x00]),
+        // offset=204800 cases (tagCopy4 - 5 bytes)
+        (204800, 4, vec![0x0f, 0x00, 0x20, 0x03, 0x00]),
+        (204800, 65, vec![0xff, 0x00, 0x20, 0x03, 0x00, 0x03, 0x00, 0x20, 0x03, 0x00]),
+        (204800, 69, vec![0xff, 0x00, 0x20, 0x03, 0x00, 0x05, 0x00]),
+        (204800, 800, vec![0xff, 0x00, 0x20, 0x03, 0x00, 0x19, 0x00, 0xdc, 0x01]),
+        (204800, 80000, vec![0xff, 0x00, 0x20, 0x03, 0x00, 0x1d, 0x00, 0x3c, 0x38, 0x00]),
     ];
 
     let mut dst = vec![0u8; 100];
@@ -1019,7 +1056,7 @@ fn test_leading_skippable_block() {
 
     // Empty read to trigger initial processing
     let mut empty = [0u8; 0];
-    reader.read(&mut empty).expect("empty read failed");
+    let _ = reader.read(&mut empty).expect("empty read failed");
 
     // Read all data - should only get "some data", not the skippable block
     let mut decoded = Vec::new();
@@ -1427,6 +1464,104 @@ fn test_decode_edge_cases() {
         (
             "decodedLen=8; tagLiteral + tagCopy1; length=4 offset=5; offset too large",
             vec![0x08, 0x0c, b'a', b'b', b'c', b'd', 0x01, 0x05],
+            vec![],
+            true,
+        ),
+        // tagLiteral with 3-byte length encoding
+        (
+            "decodedLen=3; tagLiteral, 3-byte length; length=3",
+            vec![0x03, 0xf8, 0x02, 0x00, 0x00, 0xff, 0xff, 0xff],
+            vec![0xff, 0xff, 0xff],
+            false,
+        ),
+        // tagLiteral with 4-byte length encoding
+        (
+            "decodedLen=3; tagLiteral, 4-byte length; length=3",
+            vec![0x03, 0xfc, 0x02, 0x00, 0x00, 0x00, 0xff, 0xff, 0xff],
+            vec![0xff, 0xff, 0xff],
+            false,
+        ),
+        // Error: tagLiteral 1-byte length, not enough length bytes
+        (
+            "decodedLen=1; tagLiteral, 1-byte length; not enough length bytes",
+            vec![0x01, 0xf0],
+            vec![],
+            true,
+        ),
+        // Error: tagLiteral 2-byte length, not enough length bytes
+        (
+            "decodedLen=1; tagLiteral, 2-byte length; not enough length bytes",
+            vec![0x01, 0xf4, 0x00],
+            vec![],
+            true,
+        ),
+        // Error: tagLiteral 3-byte length, not enough length bytes
+        (
+            "decodedLen=1; tagLiteral, 3-byte length; not enough length bytes",
+            vec![0x01, 0xf8, 0x00, 0x00],
+            vec![],
+            true,
+        ),
+        // Error: tagLiteral 4-byte length, not enough length bytes
+        (
+            "decodedLen=1; tagLiteral, 4-byte length; not enough length bytes",
+            vec![0x01, 0xfc, 0x00, 0x00, 0x00],
+            vec![],
+            true,
+        ),
+        // Error: tagLiteral 4-byte length, not enough dst bytes
+        (
+            "decodedLen=1; tagLiteral, 4-byte length; length=3; not enough dst bytes",
+            vec![0x01, 0xfc, 0x02, 0x00, 0x00, 0x00, 0xff, 0xff, 0xff],
+            vec![],
+            true,
+        ),
+        // Error: tagLiteral 4-byte length, not enough src bytes
+        (
+            "decodedLen=4; tagLiteral, 4-byte length; length=3; not enough src bytes",
+            vec![0x04, 0xfc, 0x02, 0x00, 0x00, 0x00, 0xff],
+            vec![],
+            true,
+        ),
+        // Error: tagCopy1, not enough extra bytes
+        (
+            "decodedLen=4; tagCopy1, 1 extra length|offset byte; not enough extra bytes",
+            vec![0x04, 0x01],
+            vec![],
+            true,
+        ),
+        // Error: tagCopy2, not enough extra bytes
+        (
+            "decodedLen=4; tagCopy2, 2 extra length|offset bytes; not enough extra bytes",
+            vec![0x04, 0x02, 0x00],
+            vec![],
+            true,
+        ),
+        // Error: tagCopy4, not enough extra bytes
+        (
+            "decodedLen=4; tagCopy4, 4 extra length|offset bytes; not enough extra bytes",
+            vec![0x04, 0x03, 0x00, 0x00, 0x00],
+            vec![],
+            true,
+        ),
+        // Repeat offset as second match (offset=0 is valid if we have a previous offset)
+        (
+            "decodedLen=13; repeat offset as second match",
+            vec![0x0d, 0x0c, b'a', b'b', b'c', b'd', 0x01, 0x01, 0x00, b'z', 0x01, 0x00],
+            b"abcdddddzzzzz".to_vec(),
+            false,
+        ),
+        // Error: inconsistent dLen
+        (
+            "decodedLen=9; tagLiteral + tagCopy1; inconsistent dLen",
+            vec![0x09, 0x0c, b'a', b'b', b'c', b'd', 0x01, 0x04],
+            vec![],
+            true,
+        ),
+        // Error: length too large
+        (
+            "decodedLen=7; tagLiteral + tagCopy1; length too large",
+            vec![0x07, 0x0c, b'a', b'b', b'c', b'd', 0x01, 0x04],
             vec![],
             true,
         ),

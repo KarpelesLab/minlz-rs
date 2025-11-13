@@ -2,7 +2,6 @@
 // Example demonstrating file compression and decompression
 
 use minlz::{decode, encode_best, Reader, Writer};
-use std::fs::File;
 use std::io::{Read, Write};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
