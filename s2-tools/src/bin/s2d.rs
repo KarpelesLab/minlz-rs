@@ -225,6 +225,8 @@ fn decompress_stdio(args: &Args) -> Result<()> {
 }
 
 fn decompress_file(input_path: &str, args: &Args) -> Result<()> {
+    use std::time::Instant;
+
     let input = PathBuf::from(input_path);
 
     if !input.exists() {
@@ -264,6 +266,9 @@ fn decompress_file(input_path: &str, args: &Args) -> Result<()> {
 
     // Get file size for progress bar
     let file_size = fs::metadata(&input)?.len();
+
+    // Start timing
+    let start_time = Instant::now();
 
     let pb = if !args.quiet && !args.stdout && !args.verify {
         let pb = ProgressBar::new(file_size);
@@ -365,12 +370,19 @@ fn decompress_file(input_path: &str, args: &Args) -> Result<()> {
         };
 
         if output_size > 0 {
-            let ratio = (file_size as f64 / output_size as f64) * 100.0;
+            // Calculate elapsed time and throughput
+            let elapsed = start_time.elapsed();
+            let throughput = output_size as f64 / elapsed.as_secs_f64() / 1_048_576.0; // MB/s
+
+            let ratio = (output_size as f64 / file_size as f64) * 100.0;
             println!(
-                "{} -> {} (compressed to {:.2}%)",
+                "Decompressing {} -> {} {} -> {} [{:.2}%]; {:.1}MB/s",
                 input.display(),
                 output.display(),
-                ratio
+                file_size,
+                output_size,
+                ratio,
+                throughput
             );
         }
     }

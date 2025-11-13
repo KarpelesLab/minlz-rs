@@ -240,6 +240,8 @@ fn compress_stdio(args: &Args) -> Result<()> {
 }
 
 fn compress_file(input_path: &str, args: &Args, block_size: usize, pad_size: usize) -> Result<()> {
+    use std::time::Instant;
+
     let input = PathBuf::from(input_path);
 
     if !input.exists() {
@@ -269,8 +271,11 @@ fn compress_file(input_path: &str, args: &Args, block_size: usize, pad_size: usi
         anyhow::bail!("Output file already exists: {}", output.display());
     }
 
-    // Get file size for progress bar
+    // Get file size
     let file_size = fs::metadata(&input)?.len();
+
+    // Start timing
+    let start_time = Instant::now();
 
     let pb = if !args.quiet && !args.stdout {
         let pb = ProgressBar::new(file_size);
@@ -426,6 +431,10 @@ fn compress_file(input_path: &str, args: &Args, block_size: usize, pad_size: usi
         pb.finish_with_message("Done");
     }
 
+    // Calculate elapsed time and throughput
+    let elapsed = start_time.elapsed();
+    let throughput = file_size as f64 / elapsed.as_secs_f64() / 1_048_576.0; // MB/s
+
     // Print compression stats
     if !args.quiet && !args.stdout {
         let output_size = if output != Path::new("-") {
@@ -437,10 +446,13 @@ fn compress_file(input_path: &str, args: &Args, block_size: usize, pad_size: usi
         if output_size > 0 {
             let ratio = (output_size as f64 / file_size as f64) * 100.0;
             println!(
-                "{} -> {} ({:.2}%)",
+                "Compressing {} -> {} {} -> {} [{:.2}%]; {:.1}MB/s",
                 input.display(),
                 output.display(),
-                ratio
+                file_size,
+                output_size,
+                ratio,
+                throughput
             );
         }
     }
