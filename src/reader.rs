@@ -5,7 +5,7 @@
 
 //! Stream reader for S2 decompression
 
-use std::io::{self, Read};
+use std::io::{self, Read, Seek, SeekFrom};
 
 use crate::constants::*;
 use crate::crc::crc;
@@ -47,6 +47,8 @@ pub struct Reader<R: Read> {
     eof: bool,
     max_block_size: usize,
     ignore_stream_id: bool,
+    // Seeking support
+    current_uncompressed_offset: i64, // Current position in uncompressed stream
 }
 
 impl<R: Read> Reader<R> {
@@ -62,6 +64,7 @@ impl<R: Read> Reader<R> {
             eof: false,
             max_block_size: MAX_BLOCK_SIZE,
             ignore_stream_id: false,
+            current_uncompressed_offset: 0,
         }
     }
 
@@ -86,6 +89,7 @@ impl<R: Read> Reader<R> {
             eof: false,
             max_block_size,
             ignore_stream_id: false,
+            current_uncompressed_offset: 0,
         }
     }
 
@@ -102,6 +106,7 @@ impl<R: Read> Reader<R> {
             eof: false,
             max_block_size: MAX_BLOCK_SIZE,
             ignore_stream_id: true,
+            current_uncompressed_offset: 0,
         }
     }
 
@@ -128,6 +133,7 @@ impl<R: Read> Reader<R> {
             eof: false,
             max_block_size: MAX_BLOCK_SIZE,
             ignore_stream_id: false,
+            current_uncompressed_offset: 0,
         }
     }
 
@@ -301,6 +307,7 @@ impl<R: Read> Reader<R> {
         self.pos = 0;
         self.read_header = false;
         self.eof = false;
+        self.current_uncompressed_offset = 0;
         std::mem::replace(&mut self.reader, reader)
     }
 
@@ -342,7 +349,95 @@ impl<R: Read> Read for Reader<R> {
         buf[..to_copy].copy_from_slice(&self.buf[self.pos..self.pos + to_copy]);
         self.pos += to_copy;
 
+        // Track uncompressed offset
+        self.current_uncompressed_offset += to_copy as i64;
+
         Ok(to_copy)
+    }
+}
+
+/// Implementation of Seek for Reader with seekable underlying reader
+///
+/// Note: This provides basic seeking support. For efficient random access,
+/// use an Index to map uncompressed offsets to compressed positions.
+impl<R: Read + Seek> Seek for Reader<R> {
+    fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
+        // Calculate target uncompressed position
+        let target_pos = match pos {
+            SeekFrom::Start(offset) => offset as i64,
+            SeekFrom::Current(offset) => self.current_uncompressed_offset + offset,
+            SeekFrom::End(_) => {
+                // For SeekFrom::End, we would need to know the total uncompressed size
+                // This requires either reading the entire stream or having an Index
+                return Err(io::Error::new(
+                    io::ErrorKind::Unsupported,
+                    "SeekFrom::End not supported without an Index. Use Index::find() to seek from end.",
+                ));
+            }
+        };
+
+        if target_pos < 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "cannot seek to negative position",
+            ));
+        }
+
+        // If seeking within current buffer, just adjust position
+        let buffer_start_offset = self.current_uncompressed_offset - self.pos as i64;
+        let buffer_end_offset = buffer_start_offset + self.buf.len() as i64;
+
+        if target_pos >= buffer_start_offset && target_pos < buffer_end_offset {
+            // Seeking within current buffer
+            let new_pos = (target_pos - buffer_start_offset) as usize;
+            self.pos = new_pos;
+            self.current_uncompressed_offset = target_pos;
+            return Ok(target_pos as u64);
+        }
+
+        // For seeks outside the current buffer, we need to reposition
+        if target_pos == 0 {
+            // Seek to beginning
+            self.reader.seek(SeekFrom::Start(0))?;
+            self.buf.clear();
+            self.pos = 0;
+            self.read_header = false;
+            self.eof = false;
+            self.current_uncompressed_offset = 0;
+            return Ok(0);
+        }
+
+        if target_pos < self.current_uncompressed_offset {
+            // Backward seek - need to start from beginning
+            self.reader.seek(SeekFrom::Start(0))?;
+            self.buf.clear();
+            self.pos = 0;
+            self.read_header = false;
+            self.eof = false;
+            self.current_uncompressed_offset = 0;
+        }
+
+        // Read forward to target position
+        let mut to_skip = (target_pos - self.current_uncompressed_offset) as u64;
+        let mut skip_buf = vec![0u8; 8192];
+
+        while to_skip > 0 {
+            let chunk_size = (to_skip as usize).min(skip_buf.len());
+            let n = self.read(&mut skip_buf[..chunk_size])?;
+            if n == 0 {
+                // Reached EOF before target
+                return Err(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    format!(
+                        "reached EOF at position {} before target {}",
+                        self.current_uncompressed_offset, target_pos
+                    ),
+                ));
+            }
+            to_skip -= n as u64;
+        }
+
+        Ok(target_pos as u64)
     }
 }
 
@@ -501,5 +596,229 @@ mod tests {
     fn test_reader_invalid_alloc_block_size() {
         let data = &[0u8; 10][..];
         let _reader = Reader::with_alloc_block_size(data, 512); // Too small
+    }
+
+    #[test]
+    fn test_reader_seek_start() {
+        use std::io::Cursor;
+
+        // Compress some data
+        let data = b"Hello, World! This is a test of seeking functionality.";
+        let mut compressed = Vec::new();
+        {
+            let mut writer = Writer::new(&mut compressed);
+            writer.write_all(data).unwrap();
+            writer.flush().unwrap();
+        }
+
+        // Create seekable reader
+        let mut reader = Reader::new(Cursor::new(compressed));
+        let mut buf = vec![0u8; 5];
+
+        // Read first 5 bytes
+        reader.read_exact(&mut buf).unwrap();
+        assert_eq!(&buf, b"Hello");
+
+        // Seek back to start
+        let pos = reader.seek(SeekFrom::Start(0)).unwrap();
+        assert_eq!(pos, 0);
+
+        // Read again
+        reader.read_exact(&mut buf).unwrap();
+        assert_eq!(&buf, b"Hello");
+    }
+
+    #[test]
+    fn test_reader_seek_forward() {
+        use std::io::Cursor;
+
+        let data = b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+        let mut compressed = Vec::new();
+        {
+            let mut writer = Writer::new(&mut compressed);
+            writer.write_all(data).unwrap();
+            writer.flush().unwrap();
+        }
+
+        let mut reader = Reader::new(Cursor::new(compressed));
+        let mut buf = vec![0u8; 5];
+
+        // Seek to position 10
+        let pos = reader.seek(SeekFrom::Start(10)).unwrap();
+        assert_eq!(pos, 10);
+
+        // Read 5 bytes
+        reader.read_exact(&mut buf).unwrap();
+        assert_eq!(&buf, b"ABCDE");
+    }
+
+    #[test]
+    fn test_reader_seek_current() {
+        use std::io::Cursor;
+
+        let data = b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+        let mut compressed = Vec::new();
+        {
+            let mut writer = Writer::new(&mut compressed);
+            writer.write_all(data).unwrap();
+            writer.flush().unwrap();
+        }
+
+        let mut reader = Reader::new(Cursor::new(compressed));
+        let mut buf = vec![0u8; 5];
+
+        // Read first 5 bytes
+        reader.read_exact(&mut buf).unwrap();
+        assert_eq!(&buf, b"01234");
+
+        // Seek forward 10 bytes from current position
+        let pos = reader.seek(SeekFrom::Current(10)).unwrap();
+        assert_eq!(pos, 15);
+
+        // Read 5 bytes
+        reader.read_exact(&mut buf).unwrap();
+        assert_eq!(&buf, b"FGHIJ");
+    }
+
+    #[test]
+    fn test_reader_seek_backward() {
+        use std::io::Cursor;
+
+        let data = b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+        let mut compressed = Vec::new();
+        {
+            let mut writer = Writer::new(&mut compressed);
+            writer.write_all(data).unwrap();
+            writer.flush().unwrap();
+        }
+
+        let mut reader = Reader::new(Cursor::new(compressed));
+        let mut buf = vec![0u8; 5];
+
+        // Read to position 20
+        reader.seek(SeekFrom::Start(20)).unwrap();
+        reader.read_exact(&mut buf).unwrap();
+        assert_eq!(&buf, b"KLMNO");
+
+        // Seek backward to position 10
+        let pos = reader.seek(SeekFrom::Start(10)).unwrap();
+        assert_eq!(pos, 10);
+
+        // Read 5 bytes
+        reader.read_exact(&mut buf).unwrap();
+        assert_eq!(&buf, b"ABCDE");
+    }
+
+    #[test]
+    fn test_reader_seek_within_buffer() {
+        use std::io::Cursor;
+
+        let data = b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+        let mut compressed = Vec::new();
+        {
+            let mut writer = Writer::new(&mut compressed);
+            writer.write_all(data).unwrap();
+            writer.flush().unwrap();
+        }
+
+        let mut reader = Reader::new(Cursor::new(compressed));
+        let mut buf = vec![0u8; 5];
+
+        // Read first 5 bytes (this loads the buffer)
+        reader.read_exact(&mut buf).unwrap();
+        assert_eq!(&buf, b"01234");
+
+        // Seek to position 2 (within current buffer)
+        let pos = reader.seek(SeekFrom::Start(2)).unwrap();
+        assert_eq!(pos, 2);
+
+        // Read 5 bytes
+        reader.read_exact(&mut buf).unwrap();
+        assert_eq!(&buf, b"23456");
+    }
+
+    #[test]
+    fn test_reader_seek_end_unsupported() {
+        use std::io::Cursor;
+
+        let data = b"Test data";
+        let mut compressed = Vec::new();
+        {
+            let mut writer = Writer::new(&mut compressed);
+            writer.write_all(data).unwrap();
+            writer.flush().unwrap();
+        }
+
+        let mut reader = Reader::new(Cursor::new(compressed));
+
+        // SeekFrom::End should return an error
+        let result = reader.seek(SeekFrom::End(-5));
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().kind(), io::ErrorKind::Unsupported);
+    }
+
+    #[test]
+    fn test_reader_seek_negative() {
+        use std::io::Cursor;
+
+        let data = b"Test data";
+        let mut compressed = Vec::new();
+        {
+            let mut writer = Writer::new(&mut compressed);
+            writer.write_all(data).unwrap();
+            writer.flush().unwrap();
+        }
+
+        let mut reader = Reader::new(Cursor::new(compressed));
+
+        // Seeking to negative position should error
+        let result = reader.seek(SeekFrom::Current(-10));
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().kind(), io::ErrorKind::InvalidInput);
+    }
+
+    #[test]
+    fn test_reader_seek_beyond_eof() {
+        use std::io::Cursor;
+
+        let data = b"Short";
+        let mut compressed = Vec::new();
+        {
+            let mut writer = Writer::new(&mut compressed);
+            writer.write_all(data).unwrap();
+            writer.flush().unwrap();
+        }
+
+        let mut reader = Reader::new(Cursor::new(compressed));
+
+        // Seeking beyond EOF should error
+        let result = reader.seek(SeekFrom::Start(1000));
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().kind(), io::ErrorKind::UnexpectedEof);
+    }
+
+    #[test]
+    fn test_reader_seek_multiple_chunks() {
+        use std::io::Cursor;
+
+        // Create data that will span multiple chunks
+        let data = vec![b'A'; 10000];
+        let mut compressed = Vec::new();
+        {
+            let mut writer = Writer::with_block_size(&mut compressed, 1024);
+            writer.write_all(&data).unwrap();
+            writer.flush().unwrap();
+        }
+
+        let mut reader = Reader::new(Cursor::new(compressed));
+        let mut buf = vec![0u8; 100];
+
+        // Seek to position in a later chunk
+        let pos = reader.seek(SeekFrom::Start(5000)).unwrap();
+        assert_eq!(pos, 5000);
+
+        // Read and verify
+        reader.read_exact(&mut buf).unwrap();
+        assert_eq!(&buf[..], &[b'A'; 100][..]);
     }
 }
