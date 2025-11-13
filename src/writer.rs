@@ -10,7 +10,6 @@ use std::io::{self, Write};
 use crate::constants::*;
 use crate::crc::crc;
 use crate::encode::encode;
-use crate::error::{Error, Result};
 
 /// Writer compresses data using the S2 stream format
 ///
@@ -149,7 +148,8 @@ impl<W: Write> Write for Writer<W> {
             }
 
             let to_write = remaining.min(space_in_buf);
-            self.buf.extend_from_slice(&buf[written..written + to_write]);
+            self.buf
+                .extend_from_slice(&buf[written..written + to_write]);
             written += to_write;
         }
 

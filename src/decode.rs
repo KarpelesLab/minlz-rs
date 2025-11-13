@@ -10,15 +10,14 @@ use crate::varint::decode_varint;
 /// Decoder for S2 and Snappy compression
 pub struct Decoder {
     /// Whether to allow Snappy format (no repeat offsets)
+    #[allow(dead_code)]
     allow_snappy: bool,
 }
 
 impl Decoder {
     /// Create a new decoder that accepts both S2 and Snappy formats
     pub fn new() -> Self {
-        Decoder {
-            allow_snappy: true,
-        }
+        Decoder { allow_snappy: true }
     }
 
     /// Create a decoder that only accepts S2 format
@@ -58,6 +57,7 @@ pub fn decode_snappy(src: &[u8]) -> Result<Vec<u8>> {
 
 /// Decode into a pre-allocated destination buffer.
 /// Returns the number of bytes written to dst.
+#[allow(dead_code)]
 pub fn decode_into(dst: &mut [u8], src: &[u8]) -> Result<usize> {
     let (dlen, header_len) = decode_len(src)?;
 
@@ -121,7 +121,7 @@ fn s2_decode(dst: &mut [u8], src: &[u8]) -> Result<()> {
                 offset = new_offset;
 
                 // Bounds check
-                if offset <= 0 || d < offset || length > dst.len() - d {
+                if offset == 0 || d < offset || length > dst.len() - d {
                     return Err(Error::Corrupt);
                 }
 
@@ -139,7 +139,7 @@ fn s2_decode(dst: &mut [u8], src: &[u8]) -> Result<()> {
                 s += 3;
 
                 // Bounds check
-                if offset <= 0 || d < offset || length > dst.len() - d {
+                if offset == 0 || d < offset || length > dst.len() - d {
                     return Err(Error::Corrupt);
                 }
 
@@ -152,17 +152,13 @@ fn s2_decode(dst: &mut [u8], src: &[u8]) -> Result<()> {
                     return Err(Error::Corrupt);
                 }
 
-                offset = u32::from_le_bytes([
-                    src[s + 1],
-                    src[s + 2],
-                    src[s + 3],
-                    src[s + 4],
-                ]) as usize;
+                offset =
+                    u32::from_le_bytes([src[s + 1], src[s + 2], src[s + 3], src[s + 4]]) as usize;
                 let length = 1 + ((src[s] >> 2) as usize);
                 s += 5;
 
                 // Bounds check
-                if offset <= 0 || d < offset || length > dst.len() - d {
+                if offset == 0 || d < offset || length > dst.len() - d {
                     return Err(Error::Corrupt);
                 }
 
@@ -204,7 +200,7 @@ fn s2_decode(dst: &mut [u8], src: &[u8]) -> Result<()> {
                 offset = new_offset;
 
                 // Bounds check
-                if offset <= 0 || d < offset || length > dst.len() - d {
+                if offset == 0 || d < offset || length > dst.len() - d {
                     return Err(Error::Corrupt);
                 }
 
@@ -222,7 +218,7 @@ fn s2_decode(dst: &mut [u8], src: &[u8]) -> Result<()> {
                 let length = 1 + ((src[s - 3] >> 2) as usize);
 
                 // Bounds check
-                if offset <= 0 || d < offset || length > dst.len() - d {
+                if offset == 0 || d < offset || length > dst.len() - d {
                     return Err(Error::Corrupt);
                 }
 
@@ -236,16 +232,12 @@ fn s2_decode(dst: &mut [u8], src: &[u8]) -> Result<()> {
                     return Err(Error::Corrupt);
                 }
 
-                offset = u32::from_le_bytes([
-                    src[s - 4],
-                    src[s - 3],
-                    src[s - 2],
-                    src[s - 1],
-                ]) as usize;
+                offset =
+                    u32::from_le_bytes([src[s - 4], src[s - 3], src[s - 2], src[s - 1]]) as usize;
                 let length = 1 + ((src[s - 5] >> 2) as usize);
 
                 // Bounds check
-                if offset <= 0 || d < offset || length > dst.len() - d {
+                if offset == 0 || d < offset || length > dst.len() - d {
                     return Err(Error::Corrupt);
                 }
 

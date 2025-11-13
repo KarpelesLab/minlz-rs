@@ -5,8 +5,8 @@ fn main() {
     let simple_data = vec![
         0x09, // varint: 9 bytes uncompressed
         0x0c, // literal, 4 bytes ((4-1) << 2 | 0x00 = 0x0c)
-        b'a', b'b', b'c', b'd',
-        0x12, 0x04, 0x00, // copy2: length=5 ((5-1) << 2 | 0x02 = 0x12), offset=4
+        b'a', b'b', b'c', b'd', 0x12, 0x04,
+        0x00, // copy2: length=5 ((5-1) << 2 | 0x02 = 0x12), offset=4
     ];
 
     println!("Input data: {:02x?}", simple_data);

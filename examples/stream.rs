@@ -24,7 +24,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("Compressed (stream format):");
     println!("  Size: {} bytes", compressed.len());
-    println!("  Ratio: {:.2}%\n", (compressed.len() as f64 / original_data.len() as f64) * 100.0);
+    println!(
+        "  Ratio: {:.2}%\n",
+        (compressed.len() as f64 / original_data.len() as f64) * 100.0
+    );
 
     // Show magic bytes
     println!("Magic bytes: {:02x?}", &compressed[..10]);

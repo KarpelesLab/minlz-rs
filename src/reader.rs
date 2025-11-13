@@ -10,7 +10,6 @@ use std::io::{self, Read};
 use crate::constants::*;
 use crate::crc::crc;
 use crate::decode::decode;
-use crate::error::{Error, Result};
 
 /// Reader decompresses data using the S2 stream format
 ///
@@ -150,10 +149,7 @@ impl<R: Read> Reader<R> {
         // Verify CRC
         let actual_crc = crc(&decompressed);
         if actual_crc != expected_crc {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "CRC mismatch",
-            ));
+            return Err(io::Error::new(io::ErrorKind::InvalidData, "CRC mismatch"));
         }
 
         // Add to buffer
@@ -183,10 +179,7 @@ impl<R: Read> Reader<R> {
         // Verify CRC
         let actual_crc = crc(&data);
         if actual_crc != expected_crc {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "CRC mismatch",
-            ));
+            return Err(io::Error::new(io::ErrorKind::InvalidData, "CRC mismatch"));
         }
 
         // Add to buffer

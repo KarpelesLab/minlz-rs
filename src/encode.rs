@@ -279,6 +279,7 @@ fn emit_copy_no_repeat(dst: &mut [u8], offset: usize, length: usize) -> usize {
 }
 
 /// Emit a COPY1 tag (11-bit offset)
+#[allow(dead_code)]
 fn emit_copy1(dst: &mut [u8], offset: usize, length: usize) -> usize {
     dst[0] = ((offset >> 8) << 5 | ((length - 4) << 2) | TAG_COPY1 as usize) as u8;
     dst[1] = offset as u8;
@@ -286,6 +287,7 @@ fn emit_copy1(dst: &mut [u8], offset: usize, length: usize) -> usize {
 }
 
 /// Emit a COPY2 tag (16-bit offset)
+#[allow(dead_code)]
 fn emit_copy2(dst: &mut [u8], offset: usize, length: usize) -> usize {
     dst[0] = (((length - 1) << 2) | TAG_COPY2 as usize) as u8;
     let bytes = (offset as u16).to_le_bytes();
@@ -451,8 +453,10 @@ fn encode_block(dst: &mut [u8], src: &[u8]) -> usize {
     let mut next_emit = 0;
     let mut s = 1;
     let mut d = 0;
+    #[allow(unused_assignments)]
     let mut repeat = 1;
 
+    #[allow(unused_variables)]
     let mut cv = load64(src, s);
 
     'outer: loop {
@@ -728,7 +732,7 @@ fn encode_block_better(dst: &mut [u8], src: &[u8]) -> usize {
 
         // Index large values sparsely in between.
         let mut index0 = index0 + 1;
-        let mut index2 = (index0 + index1 + 1) / 2;
+        let mut index2 = (index0 + index1).div_ceil(2);
         while index2 < index1 {
             if index0 < src.len() - 8 {
                 l_table[hash7(load64(src, index0), L_TABLE_BITS) as usize] = index0 as u32;

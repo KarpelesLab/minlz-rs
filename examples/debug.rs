@@ -1,4 +1,4 @@
-use minlz::{encode, decode};
+use minlz::{decode, encode};
 
 fn test_size(size: usize) {
     let data = vec![b'x'; size];
@@ -6,14 +6,21 @@ fn test_size(size: usize) {
 
     let encoded = encode(&data);
     println!("Encoded length: {}", encoded.len());
-    println!("Encoded bytes (first 20): {:02x?}", &encoded[..encoded.len().min(20)]);
+    println!(
+        "Encoded bytes (first 20): {:02x?}",
+        &encoded[..encoded.len().min(20)]
+    );
 
     match decode(&encoded) {
         Ok(decoded) => {
             if data == decoded {
                 println!("SUCCESS!");
             } else {
-                println!("MISMATCH! Expected {} bytes, got {} bytes", data.len(), decoded.len());
+                println!(
+                    "MISMATCH! Expected {} bytes, got {} bytes",
+                    data.len(),
+                    decoded.len()
+                );
             }
         }
         Err(e) => {

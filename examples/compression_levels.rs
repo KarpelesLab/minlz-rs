@@ -1,7 +1,7 @@
 // Copyright 2024 Karpeles Lab Inc.
 // Example demonstrating different compression levels
 
-use minlz::{decode, encode, encode_better, encode_best};
+use minlz::{decode, encode, encode_best, encode_better};
 
 fn main() {
     println!("S2 Compression Levels Comparison\n");
@@ -17,7 +17,10 @@ fn main() {
     let data2 = "The quick brown fox jumps over the lazy dog. "
         .repeat(100)
         .into_bytes();
-    println!("Test 2: Moderately compressible text ({} bytes)", data2.len());
+    println!(
+        "Test 2: Moderately compressible text ({} bytes)",
+        data2.len()
+    );
     test_compression(&data2);
 
     println!();

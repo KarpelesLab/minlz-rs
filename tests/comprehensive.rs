@@ -1,7 +1,7 @@
 // Copyright 2024 Karpeles Lab Inc.
 // Comprehensive tests for S2 compression
 
-use minlz::{decode, encode, encode_better, encode_best, Reader, Writer};
+use minlz::{decode, encode, encode_best, encode_better, Reader, Writer};
 use std::io::{Read, Write as _};
 
 #[test]
@@ -12,7 +12,10 @@ fn test_round_trip_all_levels() {
         ("small_text", b"Hello, World!".to_vec()),
         ("repeated", vec![b'a'; 1000]),
         ("pattern", (0..1000).map(|i| (i % 256) as u8).collect()),
-        ("lorem", b"Lorem ipsum dolor sit amet, consectetur adipiscing elit. ".repeat(100)),
+        (
+            "lorem",
+            b"Lorem ipsum dolor sit amet, consectetur adipiscing elit. ".repeat(100),
+        ),
     ];
 
     for (name, data) in test_cases {
@@ -23,12 +26,18 @@ fn test_round_trip_all_levels() {
 
         // Test Better compression
         let compressed_better = encode_better(&data);
-        let decompressed_better = decode(&compressed_better).expect(&format!("{}: better decode failed", name));
-        assert_eq!(data, decompressed_better, "{}: better round-trip failed", name);
+        let decompressed_better =
+            decode(&compressed_better).expect(&format!("{}: better decode failed", name));
+        assert_eq!(
+            data, decompressed_better,
+            "{}: better round-trip failed",
+            name
+        );
 
         // Test Best compression
         let compressed_best = encode_best(&data);
-        let decompressed_best = decode(&compressed_best).expect(&format!("{}: best decode failed", name));
+        let decompressed_best =
+            decode(&compressed_best).expect(&format!("{}: best decode failed", name));
         assert_eq!(data, decompressed_best, "{}: best round-trip failed", name);
 
         // Verify compression improves (or stays same for small data)
@@ -78,7 +87,9 @@ fn test_stream_format_comprehensive() {
 #[test]
 fn test_large_data() {
     // Test with 100KB of data (1MB causes stack overflow with large hash tables)
-    let data: Vec<u8> = (0u32..100 * 1024).map(|i| (i.wrapping_mul(7919) % 256) as u8).collect();
+    let data: Vec<u8> = (0u32..100 * 1024)
+        .map(|i| (i.wrapping_mul(7919) % 256) as u8)
+        .collect();
 
     let compressed = encode(&data);
     let decompressed = decode(&compressed).expect("large data decode failed");
@@ -127,13 +138,13 @@ fn test_incompressible_data() {
 fn test_edge_cases() {
     // Test various edge cases
     let edge_cases = vec![
-        vec![0u8; 0],         // Empty
-        vec![0u8; 1],         // Single byte
-        vec![0u8; 15],        // Just below MIN_NON_LITERAL_BLOCK_SIZE
-        vec![0u8; 16],        // MIN_NON_LITERAL_BLOCK_SIZE
-        vec![0u8; 17],        // Just above
-        vec![255u8; 100],     // All 0xFF
-        vec![0u8; 100],       // All 0x00
+        vec![0u8; 0],     // Empty
+        vec![0u8; 1],     // Single byte
+        vec![0u8; 15],    // Just below MIN_NON_LITERAL_BLOCK_SIZE
+        vec![0u8; 16],    // MIN_NON_LITERAL_BLOCK_SIZE
+        vec![0u8; 17],    // Just above
+        vec![255u8; 100], // All 0xFF
+        vec![0u8; 100],   // All 0x00
     ];
 
     for (i, data) in edge_cases.iter().enumerate() {

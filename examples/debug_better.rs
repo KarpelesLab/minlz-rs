@@ -1,4 +1,4 @@
-use minlz::{encode, encode_better, decode};
+use minlz::{decode, encode, encode_better};
 
 fn main() {
     let data = vec![b'a'; 100];
@@ -8,7 +8,10 @@ fn main() {
     // Test standard encoding
     let encoded = encode(&data);
     println!("Standard encoded: {} bytes", encoded.len());
-    println!("Standard encoded bytes: {:02x?}", &encoded[..encoded.len().min(30)]);
+    println!(
+        "Standard encoded bytes: {:02x?}",
+        &encoded[..encoded.len().min(30)]
+    );
 
     match decode(&encoded) {
         Ok(decoded) => {

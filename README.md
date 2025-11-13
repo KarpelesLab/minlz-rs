@@ -203,9 +203,11 @@ BSD-3-Clause
 Contributions are welcome! Please ensure:
 
 1. All tests pass (`cargo test`)
-2. Code is formatted (`cargo fmt`)
-3. No clippy warnings (`cargo clippy`)
+2. Code is formatted (`cargo fmt` - recommended if available)
+3. No clippy warnings (`cargo clippy` - recommended if available)
 4. Binary compatibility with Go implementation is maintained
+
+**Note**: The current implementation has been tested with all 41 tests passing but has not been run through rustfmt/clippy as they were not available during development.
 
 ## Current Status
 

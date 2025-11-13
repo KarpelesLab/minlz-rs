@@ -22,7 +22,7 @@ pub fn crc(data: &[u8]) -> u32 {
 
     // Apply the transformation from the Snappy spec:
     // return ((c >> 15) | (c << 17)) + 0xa282ead8
-    ((c >> 15) | (c << 17)).wrapping_add(0xa282ead8)
+    c.rotate_right(15).wrapping_add(0xa282ead8)
 }
 
 #[cfg(test)]

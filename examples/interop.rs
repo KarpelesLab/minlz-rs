@@ -19,13 +19,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let compressed = encode(test_data);
     println!("Compressed with Rust:");
     println!("  Size: {} bytes", compressed.len());
-    println!("  Hex: {}\n", hex::encode(&compressed[..compressed.len().min(40)]));
+    println!(
+        "  Hex: {}\n",
+        hex::encode(&compressed[..compressed.len().min(40)])
+    );
 
     // Save to file for Go to read
     let filename = "rust_compressed.s2";
     let mut file = fs::File::create(filename)?;
     file.write_all(&compressed)?;
-    println!("Saved to {} (Go can decompress this with s2.Decode)\n", filename);
+    println!(
+        "Saved to {} (Go can decompress this with s2.Decode)\n",
+        filename
+    );
 
     // Test round-trip in Rust
     let decompressed = decode(&compressed)?;

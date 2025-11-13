@@ -16,7 +16,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Compress
     let compressed = encode_best(&original_data);
-    println!("  Compressed size: {} bytes ({:.2}% of original)",
+    println!(
+        "  Compressed size: {} bytes ({:.2}% of original)",
         compressed.len(),
         (compressed.len() as f64 / original_data.len() as f64) * 100.0
     );
@@ -43,7 +44,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         writer.flush()?;
     }
 
-    println!("  Compressed stream size: {} bytes", compressed_stream.len());
+    println!(
+        "  Compressed stream size: {} bytes",
+        compressed_stream.len()
+    );
 
     // Read back
     let mut reader = Reader::new(&compressed_stream[..]);
@@ -64,13 +68,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 [2024-01-15 10:30:49] INFO: Processing request #1
 [2024-01-15 10:30:50] INFO: Processing request #2
 [2024-01-15 10:30:51] INFO: Processing request #3
-"#.repeat(50);
+"#
+    .repeat(50);
 
     println!("  Original log size: {} bytes", log_data.len());
 
     // Compress with best compression
     let compressed_log = encode_best(log_data.as_bytes());
-    println!("  Compressed log size: {} bytes ({:.2}% compression)",
+    println!(
+        "  Compressed log size: {} bytes ({:.2}% compression)",
         compressed_log.len(),
         (1.0 - compressed_log.len() as f64 / log_data.len() as f64) * 100.0
     );
@@ -85,15 +91,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let test_cases = vec![
         ("Highly repetitive", vec![b'X'; 10000]),
-        ("Sequential pattern", (0..10000).map(|i| (i % 256) as u8).collect()),
-        ("Text-like data", b"The quick brown fox jumps over the lazy dog. ".repeat(200)),
+        (
+            "Sequential pattern",
+            (0..10000).map(|i| (i % 256) as u8).collect(),
+        ),
+        (
+            "Text-like data",
+            b"The quick brown fox jumps over the lazy dog. ".repeat(200),
+        ),
     ];
 
     for (name, data) in test_cases {
         let compressed = encode_best(&data);
         let ratio = (compressed.len() as f64 / data.len() as f64) * 100.0;
-        println!("  {}: {} -> {} bytes ({:.2}%)",
-            name, data.len(), compressed.len(), ratio);
+        println!(
+            "  {}: {} -> {} bytes ({:.2}%)",
+            name,
+            data.len(),
+            compressed.len(),
+            ratio
+        );
 
         // Verify
         let decompressed = decode(&compressed)?;

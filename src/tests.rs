@@ -3,7 +3,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use crate::{decode, encode, encode_better, encode_best, max_encoded_len};
+use crate::{decode, encode, encode_best, encode_better, max_encoded_len};
 
 fn roundtrip(data: &[u8]) -> Result<(), String> {
     let original = data.to_vec();
@@ -22,7 +22,8 @@ fn roundtrip(data: &[u8]) -> Result<(), String> {
 
     // Test better encoding
     let encoded_better = encode_better(&data);
-    let decoded_better = decode(&encoded_better).map_err(|e| format!("decode better error: {}", e))?;
+    let decoded_better =
+        decode(&encoded_better).map_err(|e| format!("decode better error: {}", e))?;
 
     if decoded_better != original {
         return Err(format!(
