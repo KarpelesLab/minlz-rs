@@ -27,8 +27,8 @@ fn test_round_trip_all_levels() {
 
         // Test Better compression
         let compressed_better = encode_better(&data);
-        let decompressed_better = decode(&compressed_better)
-            .unwrap_or_else(|_| panic!("{}: better decode failed", name));
+        let decompressed_better =
+            decode(&compressed_better).unwrap_or_else(|_| panic!("{}: better decode failed", name));
         assert_eq!(
             data, decompressed_better,
             "{}: better round-trip failed",
@@ -150,8 +150,7 @@ fn test_edge_cases() {
 
     for (i, data) in edge_cases.iter().enumerate() {
         let compressed = encode(data);
-        let decompressed =
-            decode(&compressed).unwrap_or_else(|_| panic!("edge case {} failed", i));
+        let decompressed = decode(&compressed).unwrap_or_else(|_| panic!("edge case {} failed", i));
         assert_eq!(data, &decompressed, "edge case {} mismatch", i);
     }
 }
