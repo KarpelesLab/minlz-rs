@@ -155,11 +155,14 @@ fn literal_extra_size(n: i64) -> i64 {
     if n == 0 {
         return 0;
     }
+    // Note: emit_literal uses lit.len() - 1 for encoding ranges
+    // So for lit.len() values, the header sizes are:
+    // 1-60: 1 byte, 61-256: 2 bytes, 257-65536: 3 bytes, etc.
     match n {
-        0..60 => 1,
-        60..256 => 2,
-        256..65536 => 3,
-        65536..16777216 => 4,
+        1..=60 => 1,
+        61..=256 => 2,
+        257..=65536 => 3,
+        65537..=16777216 => 4,
         _ => 5,
     }
 }
