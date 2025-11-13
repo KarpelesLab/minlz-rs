@@ -127,6 +127,31 @@ let mut compressed = Vec::new();
 }
 ```
 
+### Dictionary Compression
+
+Dictionaries can improve compression of similar data by pre-seeding the compressor with common patterns:
+
+```rust
+use minlz::{make_dict, encode_with_dict, decode_with_dict};
+
+// Create a dictionary from sample data
+let samples = b"Common patterns that appear frequently in your data...";
+let dict = make_dict(samples, Some(b"Common")).unwrap();
+
+// Encode with dictionary
+let data = b"Data to compress...";
+let compressed = encode_with_dict(data, &dict);
+
+// Decode with dictionary
+let decompressed = decode_with_dict(&compressed, &dict)?;
+assert_eq!(data, &decompressed[..]);
+
+// Serialize dictionary for storage/transmission
+let dict_bytes = dict.to_bytes();
+```
+
+**Note**: Dictionary encoding currently falls back to standard compression while full implementation is in progress. Dictionary decoding is fully functional.
+
 ## Performance
 
 This Rust implementation delivers exceptional performance, often exceeding the Go reference implementation.
@@ -307,15 +332,14 @@ The current implementation passes all 48 tests, is formatted with rustfmt, and h
 - ✓ Best compression algorithm (larger hash tables, hash5/hash8)
 - ✓ Index support (offset tracking for seeking)
 - ✓ Concurrent compression (optional feature, uses Rayon)
-- ✓ Comprehensive test suite (53 tests + 10 property tests + 3 fuzz targets)
+- ✓ Dictionary support (decoding complete, encoding API available)
+- ✓ Comprehensive test suite (58 tests + 10 property tests + 3 fuzz targets)
 - ✓ Binary compatibility verified with Go implementation
 - ✓ Performance benchmarking suite
 
 **Partially Implemented:**
 - ⚠️ Index support for seeking (core structure complete, Reader integration pending)
-
-**Not Yet Implemented:**
-- ✗ Dictionary support (LOW priority - rarely used)
+- ⚠️ Dictionary encoding (API available, falls back to standard encoding; full optimization pending)
 
 See [MISSING_FEATURES.md](MISSING_FEATURES.md) for detailed analysis of missing features.
 

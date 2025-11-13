@@ -4,6 +4,7 @@
 // license that can be found in the LICENSE file.
 
 use crate::constants::*;
+use crate::dict::{Dict, MAX_DICT_SRC_OFFSET};
 use crate::error::{Error, Result};
 use crate::varint::decode_varint;
 
@@ -53,6 +54,19 @@ pub fn decode(src: &[u8]) -> Result<Vec<u8>> {
 /// This is an alias for decode() since S2 decoder handles Snappy format
 pub fn decode_snappy(src: &[u8]) -> Result<Vec<u8>> {
     decode(src)
+}
+
+/// Decode with dictionary
+///
+/// Decodes S2 data that was compressed with a dictionary.
+/// Early copy operations may reference the dictionary instead of already-decoded output.
+pub fn decode_with_dict(src: &[u8], dict: &Dict) -> Result<Vec<u8>> {
+    let (dlen, header_len) = decode_len(src)?;
+
+    let mut dst = vec![0u8; dlen];
+    s2_decode_dict(&mut dst, &src[header_len..], dict)?;
+
+    Ok(dst)
 }
 
 /// Decode into a pre-allocated destination buffer.
@@ -243,6 +257,253 @@ fn s2_decode(dst: &mut [u8], src: &[u8]) -> Result<()> {
 
                 // Copy from earlier in dst
                 copy_within(dst, d, offset, length);
+                d += length;
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    // Verify we decoded exactly the right amount
+    if d != dst.len() {
+        return Err(Error::Corrupt);
+    }
+
+    Ok(())
+}
+
+/// Core S2 decoding function with dictionary support
+fn s2_decode_dict(dst: &mut [u8], src: &[u8], dict: &Dict) -> Result<()> {
+    let mut d = 0; // destination index
+    let mut s = 0; // source index
+    let mut offset = dict.data().len() - dict.repeat(); // Initialize with dictionary repeat offset
+
+    // Fast path: process as long as we can read at least 5 bytes
+    while s < src.len().saturating_sub(5) {
+        let tag = src[s] & 0x03;
+
+        match tag {
+            TAG_LITERAL => {
+                let (length, bytes_consumed) = decode_literal_length(&src[s..])?;
+                s += bytes_consumed;
+
+                // Bounds check
+                if length > dst.len() - d || length > src.len() - s {
+                    return Err(Error::Corrupt);
+                }
+
+                // Copy literal bytes
+                dst[d..d + length].copy_from_slice(&src[s..s + length]);
+                d += length;
+                s += length;
+            }
+            TAG_COPY1 => {
+                let (new_offset, length, bytes_consumed) = decode_copy1(&src[s..], offset)?;
+                s += bytes_consumed;
+                offset = new_offset;
+
+                // Bounds check
+                if offset == 0 || length > dst.len() - d {
+                    return Err(Error::Corrupt);
+                }
+
+                // Copy from dictionary if needed
+                if d < offset {
+                    // Copying from dictionary
+                    if d > MAX_DICT_SRC_OFFSET {
+                        return Err(Error::Corrupt);
+                    }
+
+                    let dict_start = dict.data().len() - offset + d;
+                    if dict_start + length > dict.data().len() {
+                        return Err(Error::Corrupt);
+                    }
+
+                    dst[d..d + length].copy_from_slice(&dict.data()[dict_start..dict_start + length]);
+                } else {
+                    // Copy from earlier in dst
+                    copy_within(dst, d, offset, length);
+                }
+                d += length;
+            }
+            TAG_COPY2 => {
+                if s + 3 > src.len() {
+                    return Err(Error::Corrupt);
+                }
+
+                offset = u16::from_le_bytes([src[s + 1], src[s + 2]]) as usize;
+                let length = 1 + ((src[s] >> 2) as usize);
+                s += 3;
+
+                // Bounds check
+                if offset == 0 || length > dst.len() - d {
+                    return Err(Error::Corrupt);
+                }
+
+                // Copy from dictionary if needed
+                if d < offset {
+                    if d > MAX_DICT_SRC_OFFSET {
+                        return Err(Error::Corrupt);
+                    }
+
+                    let dict_start = dict.data().len() - offset + d;
+                    if dict_start + length > dict.data().len() {
+                        return Err(Error::Corrupt);
+                    }
+
+                    dst[d..d + length].copy_from_slice(&dict.data()[dict_start..dict_start + length]);
+                } else {
+                    copy_within(dst, d, offset, length);
+                }
+                d += length;
+            }
+            TAG_COPY4 => {
+                if s + 5 > src.len() {
+                    return Err(Error::Corrupt);
+                }
+
+                offset =
+                    u32::from_le_bytes([src[s + 1], src[s + 2], src[s + 3], src[s + 4]]) as usize;
+                let length = 1 + ((src[s] >> 2) as usize);
+                s += 5;
+
+                // Bounds check
+                if offset == 0 || length > dst.len() - d {
+                    return Err(Error::Corrupt);
+                }
+
+                // Copy from dictionary if needed
+                if d < offset {
+                    if d > MAX_DICT_SRC_OFFSET {
+                        return Err(Error::Corrupt);
+                    }
+
+                    let dict_start = dict.data().len() - offset + d;
+                    if dict_start + length > dict.data().len() {
+                        return Err(Error::Corrupt);
+                    }
+
+                    dst[d..d + length].copy_from_slice(&dict.data()[dict_start..dict_start + length]);
+                } else {
+                    copy_within(dst, d, offset, length);
+                }
+                d += length;
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    // Slow path: process remaining bytes with extra bounds checking
+    while s < src.len() {
+        let tag = src[s] & 0x03;
+
+        match tag {
+            TAG_LITERAL => {
+                let (length, bytes_consumed) = decode_literal_length(&src[s..])?;
+                s += bytes_consumed;
+
+                // Bounds check
+                if s > src.len() || length > dst.len() - d || length > src.len() - s {
+                    return Err(Error::Corrupt);
+                }
+
+                // Copy literal bytes
+                dst[d..d + length].copy_from_slice(&src[s..s + length]);
+                d += length;
+                s += length;
+            }
+            TAG_COPY1 => {
+                let (new_offset, length, bytes_consumed) = decode_copy1(&src[s..], offset)?;
+                s += bytes_consumed;
+
+                if s > src.len() {
+                    return Err(Error::Corrupt);
+                }
+
+                offset = new_offset;
+
+                // Bounds check
+                if offset == 0 || length > dst.len() - d {
+                    return Err(Error::Corrupt);
+                }
+
+                // Copy from dictionary if needed
+                if d < offset {
+                    if d > MAX_DICT_SRC_OFFSET {
+                        return Err(Error::Corrupt);
+                    }
+
+                    let dict_start = dict.data().len() - offset + d;
+                    if dict_start + length > dict.data().len() {
+                        return Err(Error::Corrupt);
+                    }
+
+                    dst[d..d + length].copy_from_slice(&dict.data()[dict_start..dict_start + length]);
+                } else {
+                    copy_within(dst, d, offset, length);
+                }
+                d += length;
+            }
+            TAG_COPY2 => {
+                s += 3;
+                if s > src.len() {
+                    return Err(Error::Corrupt);
+                }
+
+                offset = u16::from_le_bytes([src[s - 2], src[s - 1]]) as usize;
+                let length = 1 + ((src[s - 3] >> 2) as usize);
+
+                // Bounds check
+                if offset == 0 || length > dst.len() - d {
+                    return Err(Error::Corrupt);
+                }
+
+                // Copy from dictionary if needed
+                if d < offset {
+                    if d > MAX_DICT_SRC_OFFSET {
+                        return Err(Error::Corrupt);
+                    }
+
+                    let dict_start = dict.data().len() - offset + d;
+                    if dict_start + length > dict.data().len() {
+                        return Err(Error::Corrupt);
+                    }
+
+                    dst[d..d + length].copy_from_slice(&dict.data()[dict_start..dict_start + length]);
+                } else {
+                    copy_within(dst, d, offset, length);
+                }
+                d += length;
+            }
+            TAG_COPY4 => {
+                s += 5;
+                if s > src.len() {
+                    return Err(Error::Corrupt);
+                }
+
+                offset =
+                    u32::from_le_bytes([src[s - 4], src[s - 3], src[s - 2], src[s - 1]]) as usize;
+                let length = 1 + ((src[s - 5] >> 2) as usize);
+
+                // Bounds check
+                if offset == 0 || length > dst.len() - d {
+                    return Err(Error::Corrupt);
+                }
+
+                // Copy from dictionary if needed
+                if d < offset {
+                    if d > MAX_DICT_SRC_OFFSET {
+                        return Err(Error::Corrupt);
+                    }
+
+                    let dict_start = dict.data().len() - offset + d;
+                    if dict_start + length > dict.data().len() {
+                        return Err(Error::Corrupt);
+                    }
+
+                    dst[d..d + length].copy_from_slice(&dict.data()[dict_start..dict_start + length]);
+                } else {
+                    copy_within(dst, d, offset, length);
+                }
                 d += length;
             }
             _ => unreachable!(),

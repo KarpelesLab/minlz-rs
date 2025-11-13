@@ -4,6 +4,7 @@
 // license that can be found in the LICENSE file.
 
 use crate::constants::*;
+use crate::dict::Dict;
 use crate::error::{Error, Result};
 use crate::varint::encode_varint;
 
@@ -84,6 +85,35 @@ pub fn encode_better(src: &[u8]) -> Vec<u8> {
     let n = emit_literal(&mut dst[d..], src);
     dst.truncate(d + n);
     dst
+}
+
+/// Encode with dictionary support
+///
+/// NOTE: Current implementation falls back to standard encoding.
+/// Dictionary is used for decoding but not yet for encoding optimization.
+/// This provides API compatibility while full dictionary encoding is being implemented.
+pub fn encode_with_dict(src: &[u8], _dict: &Dict) -> Vec<u8> {
+    // TODO: Implement full dictionary-aware encoding
+    // For now, encode normally - the data can still be decoded with the dictionary
+    encode(src)
+}
+
+/// Encode better with dictionary support
+///
+/// NOTE: Current implementation falls back to standard better encoding.
+/// Dictionary is used for decoding but not yet for encoding optimization.
+pub fn encode_better_with_dict(src: &[u8], _dict: &Dict) -> Vec<u8> {
+    // TODO: Implement full dictionary-aware encoding
+    encode_better(src)
+}
+
+/// Encode best with dictionary support
+///
+/// NOTE: Current implementation falls back to standard best encoding.
+/// Dictionary is used for decoding but not yet for encoding optimization.
+pub fn encode_best_with_dict(src: &[u8], _dict: &Dict) -> Vec<u8> {
+    // TODO: Implement full dictionary-aware encoding
+    encode_best(src)
 }
 
 /// EncodeBest provides the best compression but is the slowest
