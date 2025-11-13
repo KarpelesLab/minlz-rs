@@ -1,5 +1,5 @@
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
-use minlz::{decode, encode, encode_better, encode_best};
+use minlz::{decode, encode, encode_best, encode_better};
 
 fn generate_test_data(size: usize, pattern: &str) -> Vec<u8> {
     match pattern {
@@ -7,11 +7,7 @@ fn generate_test_data(size: usize, pattern: &str) -> Vec<u8> {
         "repeated" => vec![b'a'; size],
         "text" => {
             let text = b"The quick brown fox jumps over the lazy dog. ";
-            text.iter()
-                .cycle()
-                .take(size)
-                .copied()
-                .collect()
+            text.iter().cycle().take(size).copied().collect()
         }
         "sequential" => (0..size).map(|i| (i % 256) as u8).collect(),
         _ => vec![0; size],
@@ -26,13 +22,9 @@ fn bench_encode_standard(c: &mut Criterion) {
 
         for pattern in ["random", "repeated", "text", "sequential"] {
             let data = generate_test_data(size, pattern);
-            group.bench_with_input(
-                BenchmarkId::new(pattern, size),
-                &data,
-                |b, data| {
-                    b.iter(|| encode(black_box(data)));
-                },
-            );
+            group.bench_with_input(BenchmarkId::new(pattern, size), &data, |b, data| {
+                b.iter(|| encode(black_box(data)));
+            });
         }
     }
     group.finish();
@@ -46,13 +38,9 @@ fn bench_encode_better(c: &mut Criterion) {
 
         for pattern in ["random", "repeated", "text"] {
             let data = generate_test_data(size, pattern);
-            group.bench_with_input(
-                BenchmarkId::new(pattern, size),
-                &data,
-                |b, data| {
-                    b.iter(|| encode_better(black_box(data)));
-                },
-            );
+            group.bench_with_input(BenchmarkId::new(pattern, size), &data, |b, data| {
+                b.iter(|| encode_better(black_box(data)));
+            });
         }
     }
     group.finish();
@@ -66,13 +54,9 @@ fn bench_encode_best(c: &mut Criterion) {
 
         for pattern in ["repeated", "text"] {
             let data = generate_test_data(size, pattern);
-            group.bench_with_input(
-                BenchmarkId::new(pattern, size),
-                &data,
-                |b, data| {
-                    b.iter(|| encode_best(black_box(data)));
-                },
-            );
+            group.bench_with_input(BenchmarkId::new(pattern, size), &data, |b, data| {
+                b.iter(|| encode_best(black_box(data)));
+            });
         }
     }
     group.finish();
@@ -107,16 +91,12 @@ fn bench_roundtrip(c: &mut Criterion) {
 
         for pattern in ["text", "repeated"] {
             let data = generate_test_data(size, pattern);
-            group.bench_with_input(
-                BenchmarkId::new(pattern, size),
-                &data,
-                |b, data| {
-                    b.iter(|| {
-                        let compressed = encode(black_box(data));
-                        decode(black_box(&compressed)).unwrap()
-                    });
-                },
-            );
+            group.bench_with_input(BenchmarkId::new(pattern, size), &data, |b, data| {
+                b.iter(|| {
+                    let compressed = encode(black_box(data));
+                    decode(black_box(&compressed)).unwrap()
+                });
+            });
         }
     }
     group.finish();

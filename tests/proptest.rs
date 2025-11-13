@@ -1,7 +1,7 @@
 // Copyright 2024 Karpeles Lab Inc.
 // Property-based tests using proptest
 
-use minlz::{decode, encode, encode_better, encode_best, Reader, Writer};
+use minlz::{decode, encode, encode_best, encode_better, Reader, Writer};
 use proptest::prelude::*;
 use std::io::{Read, Write as _};
 

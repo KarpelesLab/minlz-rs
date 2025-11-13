@@ -263,7 +263,9 @@ fn test_invalid_varint() {
         ),
         (
             "invalid varint, value overflows uint64",
-            vec![0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x00],
+            vec![
+                0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x00,
+            ],
         ),
         (
             "valid varint (as uint64), but value overflows uint32",
@@ -274,7 +276,7 @@ fn test_invalid_varint() {
     for (desc, input) in test_cases {
         // decode should return an error, not panic
         match decode(&input) {
-            Err(_) => {}, // Expected
+            Err(_) => {} // Expected
             Ok(_) => panic!("{}: expected error but got success", desc),
         }
     }
@@ -443,11 +445,7 @@ fn test_slow_forward_copy_overrun() {
                 want.push(want[want.len() - offset]);
             }
 
-            assert_eq!(
-                got, want,
-                "length={}, offset={}: mismatch",
-                length, offset
-            );
+            assert_eq!(got, want, "length={}, offset={}: mismatch", length, offset);
         }
     }
 }
@@ -559,8 +557,8 @@ fn test_decode_golden_input() {
 
     let compressed = fs::read("testdata/Mark.Twain-Tom.Sawyer.txt.rawsnappy")
         .expect("Failed to read golden compressed file");
-    let expected = fs::read("testdata/Mark.Twain-Tom.Sawyer.txt")
-        .expect("Failed to read golden text file");
+    let expected =
+        fs::read("testdata/Mark.Twain-Tom.Sawyer.txt").expect("Failed to read golden text file");
 
     let decoded = decode(&compressed).expect("Failed to decode golden input");
 
@@ -615,9 +613,12 @@ fn test_emit_literal() {
         // Check the header bytes
         let got_header = &dst[..n - length];
         assert_eq!(
-            got_header, &want[..],
+            got_header,
+            &want[..],
             "length={}: header mismatch\ngot:  {:?}\nwant: {:?}",
-            length, got_header, want
+            length,
+            got_header,
+            want
         );
     }
 }
@@ -671,9 +672,13 @@ fn test_emit_copy() {
 
         let got = &dst[..n];
         assert_eq!(
-            got, &want[..],
+            got,
+            &want[..],
             "offset={}, length={}: mismatch\ngot:  {:?}\nwant: {:?}",
-            offset, length, got, want
+            offset,
+            length,
+            got,
+            want
         );
     }
 }
@@ -729,9 +734,9 @@ fn test_match_len() {
 
 #[test]
 fn test_big_encode_buffer() {
-    use crate::writer::Writer;
     use crate::reader::Reader;
-    use std::io::{Write, Read};
+    use crate::writer::Writer;
+    use std::io::{Read, Write};
 
     // Use smaller sizes for tests to avoid stack overflow
     const BLOCK_SIZE: usize = 64 * 1024; // 64 KB (instead of 1 MB)
@@ -795,33 +800,33 @@ fn test_big_encode_buffer() {
 
 #[test]
 fn test_reader_uncompressed_data_ok() {
-    use crate::reader::Reader;
     use crate::crc::crc;
+    use crate::reader::Reader;
     use std::io::Read;
 
     // Build stream: magic + uncompressed chunk
     let mut stream = Vec::new();
-    
+
     // Magic bytes
     stream.extend_from_slice(b"\xff\x06\x00\x00S2sTwO");
-    
+
     // Uncompressed chunk header: type=0x01, length=8 (4 byte checksum + 4 byte data)
     stream.push(0x01);
     stream.extend_from_slice(&[0x08, 0x00, 0x00]); // length = 8 in little-endian
-    
+
     // Calculate CRC for "abcd"
     let data = b"abcd";
     let checksum = crc(data);
     stream.extend_from_slice(&checksum.to_le_bytes());
-    
+
     // Uncompressed payload
     stream.extend_from_slice(data);
-    
+
     // Read and verify
     let mut reader = Reader::new(&stream[..]);
     let mut output = Vec::new();
     reader.read_to_end(&mut output).expect("read failed");
-    
+
     assert_eq!(output, b"abcd");
 }
 
@@ -832,21 +837,21 @@ fn test_reader_uncompressed_data_no_payload() {
 
     // Build stream with truncated uncompressed chunk
     let mut stream = Vec::new();
-    
+
     // Magic bytes
     stream.extend_from_slice(b"\xff\x06\x00\x00S2sTwO");
-    
+
     // Uncompressed chunk header: type=0x01, length=4
     stream.push(0x01);
     stream.extend_from_slice(&[0x04, 0x00, 0x00]);
-    
+
     // No payload - this is corrupt
-    
+
     // Should get an error (UnexpectedEof when trying to read)
     let mut reader = Reader::new(&stream[..]);
     let mut output = Vec::new();
     let result = reader.read_to_end(&mut output);
-    
+
     assert!(result.is_err(), "expected error for missing payload");
 }
 
@@ -857,28 +862,28 @@ fn test_reader_uncompressed_data_too_long() {
 
     const MAX_BLOCK_SIZE: usize = 4 << 20; // 4 MB
     const CHECKSUM_SIZE: usize = 4;
-    
+
     // Build stream with chunk that is exactly at the limit
     let n = MAX_BLOCK_SIZE + CHECKSUM_SIZE;
     let n32 = n as u32;
-    
+
     let mut stream = Vec::new();
-    
+
     // Magic bytes
     stream.extend_from_slice(b"\xff\x06\x00\x00S2sTwO");
-    
+
     // Uncompressed chunk header with valid size (at limit)
     stream.push(0x01);
     stream.extend_from_slice(&[n32 as u8, (n32 >> 8) as u8, (n32 >> 16) as u8]);
-    
+
     // Add n bytes of zeros (this should work, though CRC will fail)
     stream.resize(stream.len() + n, 0);
-    
+
     // Should get CRC error (since CRC is all zeros)
     let mut reader = Reader::new(&stream[..]);
     let mut output = Vec::new();
     let result = reader.read_to_end(&mut output);
-    
+
     assert!(result.is_err(), "expected CRC error");
     let err_msg = result.unwrap_err().to_string();
     assert!(
@@ -886,11 +891,11 @@ fn test_reader_uncompressed_data_too_long() {
         "expected CRC error, got: {}",
         err_msg
     );
-    
+
     // Now test with chunk that is too large (over the limit)
     let n_invalid = n + 1;
     let n32_invalid = n_invalid as u32;
-    
+
     let mut stream2 = Vec::new();
     stream2.extend_from_slice(b"\xff\x06\x00\x00S2sTwO");
     stream2.push(0x01);
@@ -900,20 +905,20 @@ fn test_reader_uncompressed_data_too_long() {
         (n32_invalid >> 16) as u8,
     ]);
     stream2.resize(stream2.len() + n_invalid, 0);
-    
+
     let mut reader2 = Reader::new(&stream2[..]);
     let mut output2 = Vec::new();
     let result2 = reader2.read_to_end(&mut output2);
-    
+
     // Should fail (either with "chunk too large" or similar error)
     assert!(result2.is_err(), "expected error for too-large chunk");
 }
 
 #[test]
 fn test_big_regular_writes() {
-    use crate::writer::Writer;
     use crate::reader::Reader;
-    use std::io::{Write, Read};
+    use crate::writer::Writer;
+    use std::io::{Read, Write};
 
     // Use smaller sizes for tests (Go uses maxBlockSize which is 4MB)
     const BLOCK_SIZE: usize = 64 * 1024; // 64 KB
@@ -977,25 +982,25 @@ fn test_leading_skippable_block() {
 
     // Build a stream with: magic + skippable block + compressed data
     let mut stream = Vec::new();
-    
+
     // Magic bytes
     stream.extend_from_slice(b"\xff\x06\x00\x00S2sTwO");
-    
+
     // Skippable block (type 0x80-0xfd)
     // Type: 0x80, Length: 15 bytes ("skippable block")
     stream.push(0x80);
     stream.extend_from_slice(&[0x0f, 0x00, 0x00]); // length = 15
     stream.extend_from_slice(b"skippable block");
-    
+
     // Now add compressed data for "some data"
     // We'll use encode to create proper compressed data
-    use crate::encode::encode;
     use crate::crc::crc;
-    
+    use crate::encode::encode;
+
     let data = b"some data";
     let compressed = encode(data);
     let checksum = crc(data);
-    
+
     // Compressed chunk header
     stream.push(0x00); // CHUNK_TYPE_COMPRESSED_DATA
     let chunk_len = compressed.len() + 4; // +4 for checksum
@@ -1004,22 +1009,22 @@ fn test_leading_skippable_block() {
         (chunk_len >> 8) as u8,
         (chunk_len >> 16) as u8,
     ]);
-    
+
     // Checksum and data
     stream.extend_from_slice(&checksum.to_le_bytes());
     stream.extend_from_slice(&compressed);
-    
+
     // Read and verify - skippable block should be ignored
     let mut reader = Reader::new(&stream[..]);
-    
+
     // Empty read to trigger initial processing
     let mut empty = [0u8; 0];
     reader.read(&mut empty).expect("empty read failed");
-    
+
     // Read all data - should only get "some data", not the skippable block
     let mut decoded = Vec::new();
     reader.read_to_end(&mut decoded).expect("read failed");
-    
+
     assert_eq!(
         decoded,
         b"some data",
@@ -1030,15 +1035,15 @@ fn test_leading_skippable_block() {
 
 #[test]
 fn test_framing_format() {
-    use crate::writer::Writer;
     use crate::reader::Reader;
-    use std::io::{Write, Read};
+    use crate::writer::Writer;
+    use std::io::{Read, Write};
 
     // Create 1MB source with alternating incompressible and compressible sequences
     // Each sequence is 100KB (1e5 bytes), larger than maxBlockSize (64KB)
     const CHUNK_SIZE: usize = 100_000;
     let mut src = vec![0u8; CHUNK_SIZE * 10];
-    
+
     // Use a seeded RNG for reproducibility
     let mut seed = 1u64;
     let mut next_random = || -> u8 {
@@ -1061,19 +1066,19 @@ fn test_framing_format() {
             }
         }
     }
-    
+
     // Encode
     let mut compressed = Vec::new();
     {
         let mut writer = Writer::new(&mut compressed);
         writer.write_all(&src).expect("write failed");
     }
-    
+
     // Decode
     let mut reader = Reader::new(&compressed[..]);
     let mut decoded = Vec::new();
     reader.read_to_end(&mut decoded).expect("read failed");
-    
+
     // Verify
     assert_eq!(
         decoded.len(),
@@ -1087,13 +1092,13 @@ fn test_framing_format() {
 
 #[test]
 fn test_framing_format_better() {
-    use crate::writer::Writer;
     use crate::reader::Reader;
-    use std::io::{Write, Read};
+    use crate::writer::Writer;
+    use std::io::{Read, Write};
 
     // Same test as test_framing_format, but with "better" compression
     // (Our implementation doesn't have compression levels yet, so this is the same)
-    
+
     const CHUNK_SIZE: usize = 100_000;
     let mut src = vec![0u8; CHUNK_SIZE * 10];
 
@@ -1116,19 +1121,19 @@ fn test_framing_format_better() {
             }
         }
     }
-    
+
     // Encode (would use WriterBetterCompression if we had compression levels)
     let mut compressed = Vec::new();
     {
         let mut writer = Writer::new(&mut compressed);
         writer.write_all(&src).expect("write failed");
     }
-    
+
     // Decode
     let mut reader = Reader::new(&compressed[..]);
     let mut decoded = Vec::new();
     reader.read_to_end(&mut decoded).expect("read failed");
-    
+
     // Verify
     assert_eq!(
         decoded.len(),
@@ -1156,8 +1161,7 @@ fn test_flush() {
         // Before flush, nothing should be written yet (data is buffered)
         let len_before = writer.get_ref().len();
         assert_eq!(
-            len_before,
-            0,
+            len_before, 0,
             "before Flush: {} bytes were written to the underlying writer, want 0",
             len_before
         );
@@ -1179,9 +1183,9 @@ fn test_flush() {
 
 #[test]
 fn test_new_writer() {
-    use crate::writer::Writer;
     use crate::reader::Reader;
-    use std::io::{Write, Read};
+    use crate::writer::Writer;
+    use std::io::{Read, Write};
 
     // Test all 32 possible sub-sequences of these 5 input slices
     // Their lengths sum to 400,000, which is over 6x the max block size
@@ -1205,7 +1209,9 @@ fn test_new_writer() {
                 if i & (1 << j) == 0 {
                     continue;
                 }
-                writer.write_all(input).expect(&format!("i={:#02x}: j={}: Write failed", i, j));
+                writer
+                    .write_all(input)
+                    .expect(&format!("i={:#02x}: j={}: Write failed", i, j));
                 want.extend_from_slice(input);
             }
         } // Writer drops and closes here
@@ -1218,12 +1224,17 @@ fn test_new_writer() {
         // Decompress and verify
         let mut reader = Reader::new(&compressed[..]);
         let mut got = Vec::new();
-        reader.read_to_end(&mut got).expect(&format!("i={:#02x}: ReadAll failed", i));
+        reader
+            .read_to_end(&mut got)
+            .expect(&format!("i={:#02x}: ReadAll failed", i));
 
         assert_eq!(
-            got, want,
+            got,
+            want,
             "i={:#02x}: decoded data mismatch (got {} bytes, want {} bytes)",
-            i, got.len(), want.len()
+            i,
+            got.len(),
+            want.len()
         );
     }
 }
@@ -1236,28 +1247,28 @@ fn test_encode_noise_then_repeats() {
     // (Go tests with 256KB and 2MB, but we use smaller for testing)
     for orig_len in [64 * 1024, 256 * 1024] {
         let mut src = vec![0u8; orig_len];
-        
+
         // Use seeded RNG for reproducibility
         let mut seed = 1u64;
         let mut next_random = || -> u8 {
             seed = seed.wrapping_mul(1103515245).wrapping_add(12345);
             (seed >> 16) as u8
         };
-        
+
         // First half: incompressible random data
         let half = orig_len / 2;
         for i in 0..half {
             src[i] = next_random();
         }
-        
+
         // Second half: compressible repeated pattern
         for i in half..orig_len {
             src[i] = ((i >> 8) & 0xff) as u8;
         }
-        
+
         // Encode
         let dst = encode(&src);
-        
+
         // The encoded size should be less than 75% of original
         // (first half incompressible ~1:1, second half highly compressible)
         let max_size = orig_len * 3 / 4;
@@ -1273,38 +1284,38 @@ fn test_encode_noise_then_repeats() {
 
 #[test]
 fn test_writer_reset_without_flush() {
-    use crate::writer::Writer;
     use crate::reader::Reader;
-    use std::io::{Write, Read};
+    use crate::writer::Writer;
+    use std::io::{Read, Write};
 
     let mut buf0 = Vec::new();
     let mut buf1 = Vec::new();
-    
+
     {
         let mut writer = Writer::new(&mut buf0);
-        
+
         // Write "xxx" to buf0
         writer.write_all(b"xxx").expect("Write #0 failed");
-        
+
         // Note: we don't Flush before calling Reset
         // This should discard the "xxx" data
         writer.reset(&mut buf1);
-        
+
         // Write "yyy" to buf1
         writer.write_all(b"yyy").expect("Write #1 failed");
         writer.flush().expect("Flush failed");
-        
+
         // writer drops here
     }
-    
+
     // buf0 should be empty (no data written before reset)
     // buf1 should contain compressed "yyy"
-    
+
     // Verify buf1 contains "yyy"
     let mut reader = Reader::new(&buf1[..]);
     let mut got = Vec::new();
     reader.read_to_end(&mut got).expect("ReadAll failed");
-    
+
     assert_eq!(
         got,
         b"yyy",
@@ -1324,22 +1335,27 @@ fn test_decode_edge_cases() {
     let test_cases = vec![
         // Empty input
         ("decodedLen=0; valid input", vec![0x00], vec![], false),
-        
         // tagLiteral with 0-byte length encoding
-        ("decodedLen=3; tagLiteral, 0-byte length; length=3", 
-         vec![0x03, 0x08, 0xff, 0xff, 0xff], 
-         vec![0xff, 0xff, 0xff], false),
-        
+        (
+            "decodedLen=3; tagLiteral, 0-byte length; length=3",
+            vec![0x03, 0x08, 0xff, 0xff, 0xff],
+            vec![0xff, 0xff, 0xff],
+            false,
+        ),
         // tagLiteral with 1-byte length encoding
-        ("decodedLen=3; tagLiteral, 1-byte length; length=3",
-         vec![0x03, 0xf0, 0x02, 0xff, 0xff, 0xff],
-         vec![0xff, 0xff, 0xff], false),
-        
+        (
+            "decodedLen=3; tagLiteral, 1-byte length; length=3",
+            vec![0x03, 0xf0, 0x02, 0xff, 0xff, 0xff],
+            vec![0xff, 0xff, 0xff],
+            false,
+        ),
         // tagLiteral with 2-byte length encoding
-        ("decodedLen=3; tagLiteral, 2-byte length; length=3",
-         vec![0x03, 0xf4, 0x02, 0x00, 0xff, 0xff, 0xff],
-         vec![0xff, 0xff, 0xff], false),
-        
+        (
+            "decodedLen=3; tagLiteral, 2-byte length; length=3",
+            vec![0x03, 0xf4, 0x02, 0x00, 0xff, 0xff, 0xff],
+            vec![0xff, 0xff, 0xff],
+            false,
+        ),
         // tagLiteral with 40 bytes
         (
             "decodedLen=40; tagLiteral, 0-byte length; length=40",
@@ -1349,58 +1365,76 @@ fn test_decode_edge_cases() {
                 v
             },
             lit40.clone(),
-            false
+            false,
         ),
-        
         // tagLiteral (4 bytes "abcd") only
-        ("decodedLen=4; tagLiteral (4 bytes abcd)",
-         vec![0x04, 0x0c, b'a', b'b', b'c', b'd'],
-         b"abcd".to_vec(), false),
-        
+        (
+            "decodedLen=4; tagLiteral (4 bytes abcd)",
+            vec![0x04, 0x0c, b'a', b'b', b'c', b'd'],
+            b"abcd".to_vec(),
+            false,
+        ),
         // tagLiteral + tagCopy1: "abcd" then copy length=9 offset=4
-        ("decodedLen=13; tagLiteral + tagCopy1; length=9 offset=4",
-         vec![0x0d, 0x0c, b'a', b'b', b'c', b'd', 0x15, 0x04],
-         b"abcdabcdabcda".to_vec(), false),
-        
+        (
+            "decodedLen=13; tagLiteral + tagCopy1; length=9 offset=4",
+            vec![0x0d, 0x0c, b'a', b'b', b'c', b'd', 0x15, 0x04],
+            b"abcdabcdabcda".to_vec(),
+            false,
+        ),
         // tagLiteral + tagCopy1: "abcd" then copy length=4 offset=4
-        ("decodedLen=8; tagLiteral + tagCopy1; length=4 offset=4",
-         vec![0x08, 0x0c, b'a', b'b', b'c', b'd', 0x01, 0x04],
-         b"abcdabcd".to_vec(), false),
-        
+        (
+            "decodedLen=8; tagLiteral + tagCopy1; length=4 offset=4",
+            vec![0x08, 0x0c, b'a', b'b', b'c', b'd', 0x01, 0x04],
+            b"abcdabcd".to_vec(),
+            false,
+        ),
         // tagLiteral + tagCopy1: "abcd" then copy length=4 offset=2 (overlapping)
-        ("decodedLen=8; tagLiteral + tagCopy1; length=4 offset=2",
-         vec![0x08, 0x0c, b'a', b'b', b'c', b'd', 0x01, 0x02],
-         b"abcdcdcd".to_vec(), false),
-        
+        (
+            "decodedLen=8; tagLiteral + tagCopy1; length=4 offset=2",
+            vec![0x08, 0x0c, b'a', b'b', b'c', b'd', 0x01, 0x02],
+            b"abcdcdcd".to_vec(),
+            false,
+        ),
         // tagLiteral + tagCopy1: "abcd" then copy length=4 offset=1 (repeating)
-        ("decodedLen=8; tagLiteral + tagCopy1; length=4 offset=1",
-         vec![0x08, 0x0c, b'a', b'b', b'c', b'd', 0x01, 0x01],
-         b"abcddddd".to_vec(), false),
-        
+        (
+            "decodedLen=8; tagLiteral + tagCopy1; length=4 offset=1",
+            vec![0x08, 0x0c, b'a', b'b', b'c', b'd', 0x01, 0x01],
+            b"abcddddd".to_vec(),
+            false,
+        ),
         // Error cases: not enough dst bytes
-        ("decodedLen=2; tagLiteral, 0-byte length; length=3; not enough dst bytes",
-         vec![0x02, 0x08, 0xff, 0xff, 0xff],
-         vec![], true),
-        
+        (
+            "decodedLen=2; tagLiteral, 0-byte length; length=3; not enough dst bytes",
+            vec![0x02, 0x08, 0xff, 0xff, 0xff],
+            vec![],
+            true,
+        ),
         // Error cases: not enough src bytes
-        ("decodedLen=3; tagLiteral, 0-byte length; length=3; not enough src bytes",
-         vec![0x03, 0x08, 0xff, 0xff],
-         vec![], true),
-        
+        (
+            "decodedLen=3; tagLiteral, 0-byte length; length=3; not enough src bytes",
+            vec![0x03, 0x08, 0xff, 0xff],
+            vec![],
+            true,
+        ),
         // Error cases: offset=0 (invalid)
-        ("decodedLen=8; tagLiteral + tagCopy1; length=4 offset=0",
-         vec![0x08, 0x0c, b'a', b'b', b'c', b'd', 0x01, 0x00],
-         vec![], true),
-        
+        (
+            "decodedLen=8; tagLiteral + tagCopy1; length=4 offset=0",
+            vec![0x08, 0x0c, b'a', b'b', b'c', b'd', 0x01, 0x00],
+            vec![],
+            true,
+        ),
         // Error cases: offset too large
-        ("decodedLen=8; tagLiteral + tagCopy1; length=4 offset=5; offset too large",
-         vec![0x08, 0x0c, b'a', b'b', b'c', b'd', 0x01, 0x05],
-         vec![], true),
+        (
+            "decodedLen=8; tagLiteral + tagCopy1; length=4 offset=5; offset too large",
+            vec![0x08, 0x0c, b'a', b'b', b'c', b'd', 0x01, 0x05],
+            vec![],
+            true,
+        ),
     ];
 
     for (desc, input, expected, should_error) in test_cases {
         let result = decode(&input);
-        
+
         if should_error {
             assert!(result.is_err(), "{}: expected error but got success", desc);
         } else {
