@@ -32,7 +32,7 @@ minlz = "0.1"
 
 ## Usage
 
-### Basic Compression and Decompression
+### Block Format (Simple Compression)
 
 ```rust
 use minlz::{encode, decode};
@@ -48,6 +48,33 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let decompressed = decode(&compressed)?;
     assert_eq!(data, &decompressed[..]);
 
+    Ok(())
+}
+```
+
+### Stream Format (With CRC Validation)
+
+```rust
+use minlz::{Writer, Reader};
+use std::io::{Write, Read};
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let data = b"Streaming compression with CRC validation!";
+
+    // Compress using stream format
+    let mut compressed = Vec::new();
+    {
+        let mut writer = Writer::new(&mut compressed);
+        writer.write_all(data)?;
+        writer.flush()?;
+    }
+
+    // Decompress using stream format
+    let mut reader = Reader::new(&compressed[..]);
+    let mut decompressed = Vec::new();
+    reader.read_to_end(&mut decompressed)?;
+
+    assert_eq!(data, &decompressed[..]);
     Ok(())
 }
 ```
@@ -179,19 +206,21 @@ Contributions are welcome! Please ensure:
 
 **Implemented:**
 - ✓ Block format compression/decompression
+- ✓ Stream format (Reader/Writer with framing)
+- ✓ CRC32 validation (Castagnoli polynomial)
 - ✓ Varint encoding/decoding
-- ✓ Basic copy operations
-- ✓ Literal encoding
+- ✓ Copy operations (1-byte, 2-byte, 4-byte offsets)
+- ✓ Literal encoding (all size ranges)
+- ✓ Compressed and uncompressed chunks
+- ✓ Skippable frames and padding support
 
 **Missing (for full Go s2 compatibility):**
-- ✗ Stream format (Reader/Writer with framing)
-- ✗ CRC validation
 - ✗ Dictionary support
 - ✗ Index support for seeking
-- ✗ Snappy decoding compatibility
-- ✗ Better/Best compression algorithms (API exists but uses same implementation as standard)
-- ✗ Stream concatenation
-- ✗ Padding and uncompressed stream modes
+- ✗ Snappy format decoding compatibility (can read Snappy streams)
+- ✗ Better compression algorithm (API exists but uses same implementation as standard)
+- ✗ Best compression algorithm (API exists but uses same implementation as standard)
+- ✗ Concurrent compression
 
 ## Roadmap
 

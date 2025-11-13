@@ -36,15 +36,31 @@ pub const MIN_NON_LITERAL_BLOCK_SIZE: usize = 32;
 /// Chunk types for stream format
 pub const CHUNK_TYPE_COMPRESSED_DATA: u8 = 0x00;
 pub const CHUNK_TYPE_UNCOMPRESSED_DATA: u8 = 0x01;
+pub const CHUNK_TYPE_INDEX: u8 = 0x99;
 pub const CHUNK_TYPE_PADDING: u8 = 0xfe;
 pub const CHUNK_TYPE_STREAM_IDENTIFIER: u8 = 0xff;
 
-/// Magic chunk headers
+/// Magic bytes for stream identification
 pub const MAGIC_BODY: &[u8] = b"S2sTwO";
 pub const MAGIC_BODY_SNAPPY: &[u8] = b"sNaPpY";
 
-/// Checksum size
+/// Full magic chunk for S2 streams (0xff 0x06 0x00 0x00 "S2sTwO")
+pub const MAGIC_CHUNK: &[u8] = b"\xff\x06\x00\x00S2sTwO";
+
+/// Full magic chunk for Snappy streams (0xff 0x06 0x00 0x00 "sNaPpY")
+pub const MAGIC_CHUNK_SNAPPY: &[u8] = b"\xff\x06\x00\x00sNaPpY";
+
+/// Checksum size (CRC32)
 pub const CHECKSUM_SIZE: usize = 4;
 
 /// Chunk header size
 pub const CHUNK_HEADER_SIZE: usize = 4;
+
+/// Maximum chunk size (24-bit)
+pub const MAX_CHUNK_SIZE: usize = (1 << 24) - 1; // 16777215
+
+/// Skippable frame header size
+pub const SKIPPABLE_FRAME_HEADER: usize = 4;
+
+/// Output buffer header length (checksum + chunk header)
+pub const OBUF_HEADER_LEN: usize = CHECKSUM_SIZE + CHUNK_HEADER_SIZE;

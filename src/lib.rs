@@ -26,14 +26,19 @@
 //! ```
 
 mod constants;
+mod crc;
 mod decode;
 mod encode;
 mod error;
+mod reader;
 mod varint;
+mod writer;
 
 pub use decode::{decode, decode_len, Decoder};
 pub use encode::{encode, encode_better, encode_best, max_encoded_len, Encoder};
 pub use error::{Error, Result};
+pub use reader::Reader;
+pub use writer::Writer;
 
 #[cfg(test)]
 mod tests;
