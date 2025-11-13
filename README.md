@@ -210,17 +210,19 @@ Contributions are welcome! Please ensure:
 - ✓ CRC32 validation (Castagnoli polynomial)
 - ✓ Varint encoding/decoding
 - ✓ Copy operations (1-byte, 2-byte, 4-byte offsets)
+- ✓ Repeat offsets (S2 extension)
 - ✓ Literal encoding (all size ranges)
 - ✓ Compressed and uncompressed chunks
 - ✓ Skippable frames and padding support
+- ✓ Snappy format decoding compatibility
+- ✓ Better compression algorithm (dual hash tables, hash4/hash7)
+- ✓ Best compression algorithm (larger hash tables, hash5/hash8)
+- ✓ All 31 tests passing
 
 **Missing (for full Go s2 compatibility):**
 - ✗ Dictionary support
 - ✗ Index support for seeking
-- ✗ Snappy format decoding compatibility (can read Snappy streams)
-- ✗ Better compression algorithm (API exists but uses same implementation as standard)
-- ✗ Best compression algorithm (API exists but uses same implementation as standard)
-- ✗ Concurrent compression
+- ✗ Concurrent compression (async/parallel)
 
 ## Roadmap
 

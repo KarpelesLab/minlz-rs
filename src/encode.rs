@@ -57,17 +57,64 @@ pub fn encode(src: &[u8]) -> Vec<u8> {
 
 /// EncodeBetter provides better compression than Encode but is slower
 pub fn encode_better(src: &[u8]) -> Vec<u8> {
-    // For now, use the same implementation as encode
-    // A full "better" implementation would use a more sophisticated
-    // match finder with longer hash chains
-    encode(src)
+    let max_len = max_encoded_len(src.len()).expect("source too large");
+    let mut dst = vec![0u8; max_len];
+
+    // Write the varint-encoded length of the decompressed bytes
+    let d = encode_varint(&mut dst, src.len() as u64);
+
+    if src.is_empty() {
+        dst.truncate(d);
+        return dst;
+    }
+
+    if src.len() < MIN_NON_LITERAL_BLOCK_SIZE {
+        let n = emit_literal(&mut dst[d..], src);
+        dst.truncate(d + n);
+        return dst;
+    }
+
+    let n = encode_block_better(&mut dst[d..], src);
+    if n > 0 {
+        dst.truncate(d + n);
+        return dst;
+    }
+
+    // Not compressible
+    let n = emit_literal(&mut dst[d..], src);
+    dst.truncate(d + n);
+    dst
 }
 
 /// EncodeBest provides the best compression but is the slowest
 pub fn encode_best(src: &[u8]) -> Vec<u8> {
-    // For now, use the same implementation as encode
-    // A full "best" implementation would use optimal parsing
-    encode(src)
+    let max_len = max_encoded_len(src.len()).expect("source too large");
+    let mut dst = vec![0u8; max_len];
+
+    // Write the varint-encoded length of the decompressed bytes
+    let d = encode_varint(&mut dst, src.len() as u64);
+
+    if src.is_empty() {
+        dst.truncate(d);
+        return dst;
+    }
+
+    if src.len() < MIN_NON_LITERAL_BLOCK_SIZE {
+        let n = emit_literal(&mut dst[d..], src);
+        dst.truncate(d + n);
+        return dst;
+    }
+
+    let n = encode_block_best(&mut dst[d..], src);
+    if n > 0 {
+        dst.truncate(d + n);
+        return dst;
+    }
+
+    // Not compressible
+    let n = emit_literal(&mut dst[d..], src);
+    dst.truncate(d + n);
+    dst
 }
 
 /// Returns the maximum length of an encoded block
@@ -158,6 +205,15 @@ fn emit_literal(dst: &mut [u8], lit: &[u8]) -> usize {
             5
         }
     };
+
+    // Bounds check before copying
+    if i + lit.len() > dst.len() {
+        panic!(
+            "emit_literal: insufficient dst space: need {}, have {}",
+            i + lit.len(),
+            dst.len()
+        );
+    }
 
     dst[i..i + lit.len()].copy_from_slice(lit);
     i + lit.len()
@@ -324,6 +380,34 @@ fn hash(data: &[u8], shift: u32) -> usize {
     ((val.wrapping_mul(0x1e35a7bd)) >> shift) as usize
 }
 
+/// Hash function for 4 bytes (Better algorithm)
+#[inline]
+fn hash4(u: u64, h: u8) -> u32 {
+    const PRIME_4_BYTES: u32 = 2654435761;
+    ((u as u32).wrapping_mul(PRIME_4_BYTES)) >> ((32 - h) & 31)
+}
+
+/// Hash function for 5 bytes (Better algorithm)
+#[inline]
+fn hash5(u: u64, h: u8) -> u32 {
+    const PRIME_5_BYTES: u64 = 889523592379;
+    (((u << (64 - 40)).wrapping_mul(PRIME_5_BYTES)) >> ((64 - h) & 63)) as u32
+}
+
+/// Hash function for 7 bytes (Better algorithm)
+#[inline]
+fn hash7(u: u64, h: u8) -> u32 {
+    const PRIME_7_BYTES: u64 = 58295818150454627;
+    (((u << (64 - 56)).wrapping_mul(PRIME_7_BYTES)) >> ((64 - h) & 63)) as u32
+}
+
+/// Hash function for 8 bytes (Better algorithm)
+#[inline]
+fn hash8(u: u64, h: u8) -> u32 {
+    const PRIME_8_BYTES: u64 = 0xcf1bbcdcb7a56463;
+    ((u.wrapping_mul(PRIME_8_BYTES)) >> ((64 - h) & 63)) as u32
+}
+
 /// Load a u32 from the slice at the given offset
 #[inline]
 fn load32(data: &[u8], offset: usize) -> u32 {
@@ -446,6 +530,477 @@ fn encode_block(dst: &mut [u8], src: &[u8]) -> usize {
     // Check if compression was worthwhile
     if d >= src.len() - src.len() / 32 {
         return 0;
+    }
+
+    d
+}
+
+/// Encode a block using the Better S2 algorithm with dual hash tables
+fn encode_block_better(dst: &mut [u8], src: &[u8]) -> usize {
+    if src.len() < MIN_NON_LITERAL_BLOCK_SIZE {
+        return 0;
+    }
+
+    // Initialize the hash tables.
+    const L_TABLE_BITS: u8 = 17; // Long hash matches
+    const S_TABLE_BITS: u8 = 14; // Short hash matches
+    const L_TABLE_SIZE: usize = 1 << L_TABLE_BITS;
+    const S_TABLE_SIZE: usize = 1 << S_TABLE_BITS;
+
+    let mut l_table = vec![0u32; L_TABLE_SIZE];
+    let mut s_table = vec![0u32; S_TABLE_SIZE];
+
+    // Bail if we can't compress to at least this.
+    let dst_limit = src.len() - src.len() / 32 - 6;
+
+    let s_limit = src.len() - INPUT_MARGIN;
+    let mut next_emit = 0;
+    let mut s = 1;
+    let mut d = 0;
+    let mut repeat = 0;
+
+    if src.len() < 8 {
+        // Too small for Better algorithm, fallback to simple literal
+        return 0;
+    }
+
+    let mut cv = load64(src, s);
+
+    'outer: loop {
+        let mut candidate_l;
+        let mut next_s;
+
+        // Find a match
+        loop {
+            // Next src position to check
+            next_s = s + (s - next_emit) / 128 + 1;
+            if next_s > s_limit {
+                break 'outer;
+            }
+
+            let hash_l = hash7(cv, L_TABLE_BITS) as usize;
+            let hash_s = hash4(cv, S_TABLE_BITS) as usize;
+            candidate_l = l_table[hash_l] as usize;
+            let candidate_s = s_table[hash_s] as usize;
+            l_table[hash_l] = s as u32;
+            s_table[hash_s] = s as u32;
+
+            let val_long = if candidate_l > 0 && candidate_l < src.len() - 8 {
+                load64(src, candidate_l)
+            } else {
+                0
+            };
+            let val_short = if candidate_s > 0 && candidate_s < src.len() - 8 {
+                load64(src, candidate_s)
+            } else {
+                0
+            };
+
+            // If long matches at least 8 bytes, use that.
+            if cv == val_long {
+                break;
+            }
+            if cv == val_short {
+                candidate_l = candidate_s;
+                break;
+            }
+
+            // Long likely matches 7, so take that.
+            if (cv as u32) == (val_long as u32) {
+                break;
+            }
+
+            // Check our short candidate
+            if (cv as u32) == (val_short as u32) {
+                // Try a long candidate at s+1
+                let hash_l = hash7(cv >> 8, L_TABLE_BITS) as usize;
+                let candidate_l_next = l_table[hash_l] as usize;
+                l_table[hash_l] = (s + 1) as u32;
+                if candidate_l_next > 0
+                    && candidate_l_next < src.len() - 4
+                    && (cv >> 8) as u32 == load32(src, candidate_l_next)
+                {
+                    s += 1;
+                    candidate_l = candidate_l_next;
+                    break;
+                }
+                // Use our short candidate.
+                candidate_l = candidate_s;
+                break;
+            }
+
+            if next_s + 8 <= src.len() {
+                cv = load64(src, next_s);
+            }
+            s = next_s;
+        }
+
+        // Extend backwards
+        while candidate_l > 0 && s > next_emit && src[candidate_l - 1] == src[s - 1] {
+            candidate_l -= 1;
+            s -= 1;
+        }
+
+        // Bail if we exceed the maximum size.
+        if d + (s - next_emit) > dst_limit {
+            return 0;
+        }
+
+        let base = s;
+        let offset = base - candidate_l;
+
+        // Extend the 4-byte match as long as possible.
+        s += 4;
+        let mut candidate = candidate_l + 4;
+        while s < src.len() {
+            if src.len() - s < 8 {
+                if s < src.len() && candidate < src.len() && src[s] == src[candidate] {
+                    s += 1;
+                    candidate += 1;
+                    continue;
+                }
+                break;
+            }
+            if candidate + 8 > src.len() {
+                break;
+            }
+            let diff = load64(src, s) ^ load64(src, candidate);
+            if diff != 0 {
+                s += (diff.trailing_zeros() / 8) as usize;
+                break;
+            }
+            s += 8;
+            candidate += 8;
+        }
+
+        // Bail if the match is equal or worse to the encoding for large offsets.
+        if offset > 65535 && s - base <= 5 && repeat != offset {
+            s = next_s + 1;
+            if s >= s_limit {
+                break;
+            }
+            if s + 8 <= src.len() {
+                cv = load64(src, s);
+            }
+            continue;
+        }
+
+        // Emit literal
+        d += emit_literal(&mut dst[d..], &src[next_emit..base]);
+
+        // Emit copy
+        if repeat == offset {
+            d += emit_repeat(&mut dst[d..], offset, s - base);
+        } else {
+            d += emit_copy(&mut dst[d..], offset, s - base);
+            repeat = offset;
+        }
+
+        next_emit = s;
+        if s >= s_limit {
+            break;
+        }
+
+        if d > dst_limit {
+            // Do we have space for more, if not bail.
+            return 0;
+        }
+
+        // Index short & long
+        let index0 = base + 1;
+        let index1 = s - 2;
+
+        if index0 < src.len() - 8 {
+            let cv0 = load64(src, index0);
+            l_table[hash7(cv0, L_TABLE_BITS) as usize] = index0 as u32;
+            if index0 + 1 < src.len() - 8 {
+                s_table[hash4(cv0 >> 8, S_TABLE_BITS) as usize] = (index0 + 1) as u32;
+            }
+        }
+
+        if index1 > 0 && index1 < src.len() - 8 {
+            let cv1 = load64(src, index1);
+            l_table[hash7(cv1, L_TABLE_BITS) as usize] = index1 as u32;
+            if index1 + 1 < src.len() - 8 {
+                s_table[hash4(cv1 >> 8, S_TABLE_BITS) as usize] = (index1 + 1) as u32;
+            }
+        }
+
+        // Index large values sparsely in between.
+        let mut index0 = index0 + 1;
+        let mut index2 = (index0 + index1 + 1) / 2;
+        while index2 < index1 {
+            if index0 < src.len() - 8 {
+                l_table[hash7(load64(src, index0), L_TABLE_BITS) as usize] = index0 as u32;
+            }
+            if index2 < src.len() - 8 {
+                l_table[hash7(load64(src, index2), L_TABLE_BITS) as usize] = index2 as u32;
+            }
+            index0 += 2;
+            index2 += 2;
+        }
+
+        if s + 8 <= src.len() {
+            cv = load64(src, s);
+        }
+    }
+
+    // Emit remaining
+    if next_emit < src.len() {
+        // Bail if we exceed the maximum size.
+        if d + src.len() - next_emit > dst_limit {
+            return 0;
+        }
+        d += emit_literal(&mut dst[d..], &src[next_emit..]);
+    }
+
+    d
+}
+
+/// Emit a copy with potential repeat optimization
+fn emit_copy(dst: &mut [u8], offset: usize, length: usize) -> usize {
+    if offset >= 65536 {
+        return emit_copy4(dst, offset, length);
+    }
+
+    // Offset no more than 2 bytes
+    if length > 64 {
+        // Emit a length 60 copy, encoded as 3 bytes
+        dst[0] = ((59 << 2) | TAG_COPY2 as usize) as u8;
+        dst[1] = offset as u8;
+        dst[2] = (offset >> 8) as u8;
+        let remaining = length - 60;
+        // Emit remaining
+        return 3 + emit_copy(&mut dst[3..], offset, remaining);
+    }
+
+    if length >= 12 || offset >= 2048 {
+        // Emit the remaining copy, encoded as 3 bytes
+        dst[0] = (((length - 1) << 2) | TAG_COPY2 as usize) as u8;
+        dst[1] = offset as u8;
+        dst[2] = (offset >> 8) as u8;
+        return 3;
+    }
+
+    // Emit the remaining copy, encoded as 2 bytes
+    dst[0] = (((offset >> 8) << 5) | ((length - 4) << 2) | TAG_COPY1 as usize) as u8;
+    dst[1] = offset as u8;
+    2
+}
+
+/// Encode a block using the Best S2 algorithm with larger hash tables and more thorough searching
+fn encode_block_best(dst: &mut [u8], src: &[u8]) -> usize {
+    if src.len() < MIN_NON_LITERAL_BLOCK_SIZE {
+        return 0;
+    }
+
+    // Initialize the hash tables with larger sizes for better compression
+    const L_TABLE_BITS: u8 = 19; // Long hash matches (larger than Better)
+    const S_TABLE_BITS: u8 = 16; // Short hash matches (larger than Better)
+    const L_TABLE_SIZE: usize = 1 << L_TABLE_BITS;
+    const S_TABLE_SIZE: usize = 1 << S_TABLE_BITS;
+
+    let mut l_table = vec![0u32; L_TABLE_SIZE];
+    let mut s_table = vec![0u32; S_TABLE_SIZE];
+
+    // Bail if we can't compress to at least this.
+    let dst_limit = src.len() - 5;
+
+    let s_limit = src.len() - INPUT_MARGIN;
+    let mut next_emit = 0;
+    let mut s = 1;
+    let mut d = 0;
+    let mut repeat = 0;
+
+    if src.len() < 8 {
+        // Too small for Best algorithm, fallback to simple literal
+        return 0;
+    }
+
+    let mut cv = load64(src, s);
+
+    'outer: loop {
+        let mut candidate_l;
+        let mut next_s;
+
+        // Find a match - Best uses slower but more thorough search
+        loop {
+            // Next src position to check - Best uses smaller skip for more thorough search
+            next_s = s + (s - next_emit) / 256 + 1;
+            if next_s > s_limit {
+                break 'outer;
+            }
+
+            let hash_l = hash8(cv, L_TABLE_BITS) as usize;
+            let hash_s = hash5(cv, S_TABLE_BITS) as usize;
+            candidate_l = l_table[hash_l] as usize;
+            let candidate_s = s_table[hash_s] as usize;
+            l_table[hash_l] = s as u32;
+            s_table[hash_s] = s as u32;
+
+            let val_long = if candidate_l > 0 && candidate_l < src.len() - 8 {
+                load64(src, candidate_l)
+            } else {
+                0
+            };
+            let val_short = if candidate_s > 0 && candidate_s < src.len() - 8 {
+                load64(src, candidate_s)
+            } else {
+                0
+            };
+
+            // If long matches at least 8 bytes, use that.
+            if cv == val_long {
+                break;
+            }
+            if cv == val_short {
+                candidate_l = candidate_s;
+                break;
+            }
+
+            // Long likely matches 7, so take that.
+            if (cv as u32) == (val_long as u32) {
+                break;
+            }
+
+            // Check our short candidate
+            if (cv as u32) == (val_short as u32) {
+                // Try a long candidate at s+1
+                let hash_l = hash8(cv >> 8, L_TABLE_BITS) as usize;
+                let candidate_l_next = l_table[hash_l] as usize;
+                l_table[hash_l] = (s + 1) as u32;
+                if candidate_l_next > 0
+                    && candidate_l_next < src.len() - 4
+                    && (cv >> 8) as u32 == load32(src, candidate_l_next)
+                {
+                    s += 1;
+                    candidate_l = candidate_l_next;
+                    break;
+                }
+                // Use our short candidate.
+                candidate_l = candidate_s;
+                break;
+            }
+
+            if next_s + 8 <= src.len() {
+                cv = load64(src, next_s);
+            }
+            s = next_s;
+        }
+
+        // Extend backwards
+        while candidate_l > 0 && s > next_emit && src[candidate_l - 1] == src[s - 1] {
+            candidate_l -= 1;
+            s -= 1;
+        }
+
+        // Bail if we exceed the maximum size.
+        if d + (s - next_emit) > dst_limit {
+            return 0;
+        }
+
+        let base = s;
+        let offset = base - candidate_l;
+
+        // Extend the 4-byte match as long as possible.
+        s += 4;
+        let mut candidate = candidate_l + 4;
+        while s < src.len() {
+            if src.len() - s < 8 {
+                if s < src.len() && candidate < src.len() && src[s] == src[candidate] {
+                    s += 1;
+                    candidate += 1;
+                    continue;
+                }
+                break;
+            }
+            if candidate + 8 > src.len() {
+                break;
+            }
+            let diff = load64(src, s) ^ load64(src, candidate);
+            if diff != 0 {
+                s += (diff.trailing_zeros() / 8) as usize;
+                break;
+            }
+            s += 8;
+            candidate += 8;
+        }
+
+        // Bail if the match is equal or worse to the encoding for large offsets.
+        if offset > 65535 && s - base <= 5 && repeat != offset {
+            s = next_s + 1;
+            if s >= s_limit {
+                break;
+            }
+            if s + 8 <= src.len() {
+                cv = load64(src, s);
+            }
+            continue;
+        }
+
+        // Emit literal
+        d += emit_literal(&mut dst[d..], &src[next_emit..base]);
+
+        // Emit copy
+        if repeat == offset {
+            d += emit_repeat(&mut dst[d..], offset, s - base);
+        } else {
+            d += emit_copy(&mut dst[d..], offset, s - base);
+            repeat = offset;
+        }
+
+        next_emit = s;
+        if s >= s_limit {
+            break;
+        }
+
+        if d > dst_limit {
+            // Do we have space for more, if not bail.
+            return 0;
+        }
+
+        // Index more aggressively for Best compression
+        let index0 = base + 1;
+        let index1 = s - 2;
+
+        if index0 < src.len() - 8 {
+            let cv0 = load64(src, index0);
+            l_table[hash8(cv0, L_TABLE_BITS) as usize] = index0 as u32;
+            if index0 + 1 < src.len() - 8 {
+                s_table[hash5(cv0 >> 8, S_TABLE_BITS) as usize] = (index0 + 1) as u32;
+            }
+        }
+
+        if index1 > 0 && index1 < src.len() - 8 {
+            let cv1 = load64(src, index1);
+            l_table[hash8(cv1, L_TABLE_BITS) as usize] = index1 as u32;
+            if index1 + 1 < src.len() - 8 {
+                s_table[hash5(cv1 >> 8, S_TABLE_BITS) as usize] = (index1 + 1) as u32;
+            }
+        }
+
+        // Index even more positions in between for Best
+        let mut index_mid = index0 + 1;
+        while index_mid < index1 {
+            if index_mid < src.len() - 8 {
+                let cv_mid = load64(src, index_mid);
+                l_table[hash8(cv_mid, L_TABLE_BITS) as usize] = index_mid as u32;
+            }
+            index_mid += 2;
+        }
+
+        if s + 8 <= src.len() {
+            cv = load64(src, s);
+        }
+    }
+
+    // Emit remaining
+    if next_emit < src.len() {
+        // Bail if we exceed the maximum size.
+        if d + src.len() - next_emit > dst_limit {
+            return 0;
+        }
+        d += emit_literal(&mut dst[d..], &src[next_emit..]);
     }
 
     d

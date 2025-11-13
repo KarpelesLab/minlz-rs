@@ -7,13 +7,25 @@ use crate::constants::*;
 use crate::error::{Error, Result};
 use crate::varint::decode_varint;
 
-/// Decoder for S2 compression
-pub struct Decoder;
+/// Decoder for S2 and Snappy compression
+pub struct Decoder {
+    /// Whether to allow Snappy format (no repeat offsets)
+    allow_snappy: bool,
+}
 
 impl Decoder {
-    /// Create a new decoder
+    /// Create a new decoder that accepts both S2 and Snappy formats
     pub fn new() -> Self {
-        Decoder
+        Decoder {
+            allow_snappy: true,
+        }
+    }
+
+    /// Create a decoder that only accepts S2 format
+    pub fn new_s2_only() -> Self {
+        Decoder {
+            allow_snappy: false,
+        }
     }
 }
 
@@ -27,6 +39,7 @@ impl Default for Decoder {
 /// of dst if dst was large enough to hold the entire decoded block.
 /// Otherwise, a newly allocated Vec will be returned.
 ///
+/// This function accepts both S2 and Snappy format.
 /// The dst and src must not overlap. It is valid to pass an empty dst.
 pub fn decode(src: &[u8]) -> Result<Vec<u8>> {
     let (dlen, header_len) = decode_len(src)?;
@@ -35,6 +48,12 @@ pub fn decode(src: &[u8]) -> Result<Vec<u8>> {
     s2_decode(&mut dst, &src[header_len..])?;
 
     Ok(dst)
+}
+
+/// Decode Snappy format data
+/// This is an alias for decode() since S2 decoder handles Snappy format
+pub fn decode_snappy(src: &[u8]) -> Result<Vec<u8>> {
+    decode(src)
 }
 
 /// Decode into a pre-allocated destination buffer.
