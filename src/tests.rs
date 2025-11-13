@@ -1312,3 +1312,110 @@ fn test_writer_reset_without_flush() {
         String::from_utf8_lossy(&got)
     );
 }
+
+#[test]
+fn test_decode_edge_cases() {
+    use crate::decode::decode;
+
+    // Create a 40-byte literal for test cases
+    let lit40: Vec<u8> = (0..40).collect();
+
+    // Test cases: (description, input, expected_output, should_error)
+    let test_cases = vec![
+        // Empty input
+        ("decodedLen=0; valid input", vec![0x00], vec![], false),
+        
+        // tagLiteral with 0-byte length encoding
+        ("decodedLen=3; tagLiteral, 0-byte length; length=3", 
+         vec![0x03, 0x08, 0xff, 0xff, 0xff], 
+         vec![0xff, 0xff, 0xff], false),
+        
+        // tagLiteral with 1-byte length encoding
+        ("decodedLen=3; tagLiteral, 1-byte length; length=3",
+         vec![0x03, 0xf0, 0x02, 0xff, 0xff, 0xff],
+         vec![0xff, 0xff, 0xff], false),
+        
+        // tagLiteral with 2-byte length encoding
+        ("decodedLen=3; tagLiteral, 2-byte length; length=3",
+         vec![0x03, 0xf4, 0x02, 0x00, 0xff, 0xff, 0xff],
+         vec![0xff, 0xff, 0xff], false),
+        
+        // tagLiteral with 40 bytes
+        (
+            "decodedLen=40; tagLiteral, 0-byte length; length=40",
+            {
+                let mut v = vec![0x28, 0x9c];
+                v.extend_from_slice(&lit40);
+                v
+            },
+            lit40.clone(),
+            false
+        ),
+        
+        // tagLiteral (4 bytes "abcd") only
+        ("decodedLen=4; tagLiteral (4 bytes abcd)",
+         vec![0x04, 0x0c, b'a', b'b', b'c', b'd'],
+         b"abcd".to_vec(), false),
+        
+        // tagLiteral + tagCopy1: "abcd" then copy length=9 offset=4
+        ("decodedLen=13; tagLiteral + tagCopy1; length=9 offset=4",
+         vec![0x0d, 0x0c, b'a', b'b', b'c', b'd', 0x15, 0x04],
+         b"abcdabcdabcda".to_vec(), false),
+        
+        // tagLiteral + tagCopy1: "abcd" then copy length=4 offset=4
+        ("decodedLen=8; tagLiteral + tagCopy1; length=4 offset=4",
+         vec![0x08, 0x0c, b'a', b'b', b'c', b'd', 0x01, 0x04],
+         b"abcdabcd".to_vec(), false),
+        
+        // tagLiteral + tagCopy1: "abcd" then copy length=4 offset=2 (overlapping)
+        ("decodedLen=8; tagLiteral + tagCopy1; length=4 offset=2",
+         vec![0x08, 0x0c, b'a', b'b', b'c', b'd', 0x01, 0x02],
+         b"abcdcdcd".to_vec(), false),
+        
+        // tagLiteral + tagCopy1: "abcd" then copy length=4 offset=1 (repeating)
+        ("decodedLen=8; tagLiteral + tagCopy1; length=4 offset=1",
+         vec![0x08, 0x0c, b'a', b'b', b'c', b'd', 0x01, 0x01],
+         b"abcddddd".to_vec(), false),
+        
+        // Error cases: not enough dst bytes
+        ("decodedLen=2; tagLiteral, 0-byte length; length=3; not enough dst bytes",
+         vec![0x02, 0x08, 0xff, 0xff, 0xff],
+         vec![], true),
+        
+        // Error cases: not enough src bytes
+        ("decodedLen=3; tagLiteral, 0-byte length; length=3; not enough src bytes",
+         vec![0x03, 0x08, 0xff, 0xff],
+         vec![], true),
+        
+        // Error cases: offset=0 (invalid)
+        ("decodedLen=8; tagLiteral + tagCopy1; length=4 offset=0",
+         vec![0x08, 0x0c, b'a', b'b', b'c', b'd', 0x01, 0x00],
+         vec![], true),
+        
+        // Error cases: offset too large
+        ("decodedLen=8; tagLiteral + tagCopy1; length=4 offset=5; offset too large",
+         vec![0x08, 0x0c, b'a', b'b', b'c', b'd', 0x01, 0x05],
+         vec![], true),
+    ];
+
+    for (desc, input, expected, should_error) in test_cases {
+        let result = decode(&input);
+        
+        if should_error {
+            assert!(result.is_err(), "{}: expected error but got success", desc);
+        } else {
+            match result {
+                Ok(output) => {
+                    assert_eq!(
+                        output, expected,
+                        "{}: output mismatch\ngot:  {:?}\nwant: {:?}",
+                        desc, output, expected
+                    );
+                }
+                Err(e) => {
+                    panic!("{}: unexpected error: {}", desc, e);
+                }
+            }
+        }
+    }
+}
