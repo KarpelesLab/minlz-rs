@@ -8,7 +8,7 @@ use indicatif::{ProgressBar, ProgressStyle};
 use minlz::{encode, encode_best, encode_better, Writer};
 use std::fs::{self, File};
 use std::io::{self, Read, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(Parser)]
 #[command(name = "s2c")]
@@ -149,7 +149,7 @@ fn compress_file(input_path: &str, args: &Args, block_size: usize) -> Result<()>
     };
 
     // Check if output exists in safe mode
-    if args.safe && output != PathBuf::from("-") && output.exists() {
+    if args.safe && output != Path::new("-") && output.exists() {
         anyhow::bail!("Output file already exists: {}", output.display());
     }
 
@@ -189,7 +189,7 @@ fn compress_file(input_path: &str, args: &Args, block_size: usize) -> Result<()>
             encode_better(&data)
         };
 
-        if output == PathBuf::from("-") {
+        if output == Path::new("-") {
             io::stdout().write_all(&compressed)?;
         } else {
             let mut output_file = File::create(&output)
@@ -198,7 +198,7 @@ fn compress_file(input_path: &str, args: &Args, block_size: usize) -> Result<()>
         }
     } else {
         // Stream mode
-        if output == PathBuf::from("-") {
+        if output == Path::new("-") {
             let stdout = io::stdout();
             let mut stdout_lock = stdout.lock();
             let mut s2_writer = Writer::with_block_size(&mut stdout_lock, block_size);
@@ -241,7 +241,7 @@ fn compress_file(input_path: &str, args: &Args, block_size: usize) -> Result<()>
 
     // Print compression stats
     if !args.quiet && !args.stdout {
-        let output_size = if output != PathBuf::from("-") {
+        let output_size = if output != Path::new("-") {
             fs::metadata(&output)?.len()
         } else {
             0
@@ -259,7 +259,7 @@ fn compress_file(input_path: &str, args: &Args, block_size: usize) -> Result<()>
     }
 
     // Remove source file if requested
-    if args.rm && output != PathBuf::from("-") {
+    if args.rm && output != Path::new("-") {
         fs::remove_file(&input)
             .with_context(|| format!("Failed to remove source file: {}", input.display()))?;
     }

@@ -8,7 +8,7 @@ use indicatif::{ProgressBar, ProgressStyle};
 use minlz::{decode, Reader};
 use std::fs::{self, File};
 use std::io::{self, Read, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(Parser)]
 #[command(name = "s2d")]
@@ -145,7 +145,7 @@ fn decompress_file(input_path: &str, args: &Args) -> Result<()> {
     };
 
     // Check if output exists in safe mode
-    if args.safe && !args.verify && output != PathBuf::from("-") && output.exists() {
+    if args.safe && !args.verify && output != Path::new("-") && output.exists() {
         anyhow::bail!("Output file already exists: {}", output.display());
     }
 
@@ -183,7 +183,7 @@ fn decompress_file(input_path: &str, args: &Args) -> Result<()> {
             if !args.quiet {
                 println!("Verification successful: {}", input.display());
             }
-        } else if output == PathBuf::from("-") {
+        } else if output == Path::new("-") {
             io::stdout().write_all(&decompressed)?;
         } else {
             let mut output_file = File::create(&output)
@@ -208,7 +208,7 @@ fn decompress_file(input_path: &str, args: &Args) -> Result<()> {
             if !args.quiet {
                 println!("Verification successful: {}", input.display());
             }
-        } else if output == PathBuf::from("-") {
+        } else if output == Path::new("-") {
             let stdout = io::stdout();
             let mut stdout_lock = stdout.lock();
             let mut buffer = vec![0u8; 128 * 1024];
@@ -245,7 +245,7 @@ fn decompress_file(input_path: &str, args: &Args) -> Result<()> {
 
     // Print decompression stats
     if !args.quiet && !args.stdout && !args.verify {
-        let output_size = if output != PathBuf::from("-") {
+        let output_size = if output != Path::new("-") {
             fs::metadata(&output)?.len()
         } else {
             0
@@ -263,7 +263,7 @@ fn decompress_file(input_path: &str, args: &Args) -> Result<()> {
     }
 
     // Remove source file if requested
-    if args.rm && output != PathBuf::from("-") && !args.verify {
+    if args.rm && output != Path::new("-") && !args.verify {
         fs::remove_file(&input)
             .with_context(|| format!("Failed to remove source file: {}", input.display()))?;
     }
