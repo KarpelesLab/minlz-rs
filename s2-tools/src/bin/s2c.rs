@@ -5,7 +5,7 @@
 use anyhow::{Context, Result};
 use clap::Parser;
 use indicatif::{ProgressBar, ProgressStyle};
-use minlz::{encode, encode_best, encode_better, ConcurrentWriter, Writer};
+use minlz::{encode, encode_best, encode_better, ConcurrentWriter, Reader, Writer};
 use std::fs::{self, File};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
@@ -108,18 +108,17 @@ fn main() -> Result<()> {
     };
 
     // Check for unsupported features
-    if args.verify {
-        eprintln!("Warning: --verify is not yet implemented");
-    }
-    if args.bench.is_some() {
-        eprintln!("Warning: --bench is not yet implemented");
-    }
     if args.recomp {
         eprintln!("Warning: --recomp is not yet implemented");
     }
 
     // Parse block size
     let block_size = parse_size(&args.blocksize).context("Invalid block size")?;
+
+    // Handle benchmark mode
+    if let Some(bench_count) = args.bench {
+        return run_benchmark(&args, block_size, bench_count);
+    }
 
     // Handle stdin/stdout case
     if args.files.len() == 1 && args.files[0] == "-" {
@@ -129,6 +128,86 @@ fn main() -> Result<()> {
     // Compress each file
     for file in &args.files {
         compress_file(file, &args, block_size, pad_size)?;
+    }
+
+    Ok(())
+}
+
+fn run_benchmark(args: &Args, block_size: usize, iterations: usize) -> Result<()> {
+    use std::time::Instant;
+
+    for file_path in &args.files {
+        if file_path == "-" {
+            anyhow::bail!("Cannot benchmark stdin");
+        }
+
+        let input = PathBuf::from(file_path);
+        if !input.exists() {
+            anyhow::bail!("File not found: {}", file_path);
+        }
+
+        // Read file into memory
+        let mut file_data = Vec::new();
+        File::open(&input)
+            .with_context(|| format!("Failed to open file: {}", input.display()))?
+            .read_to_end(&mut file_data)?;
+
+        let file_size = file_data.len();
+
+        if args.block {
+            // Block mode benchmark
+            println!(
+                "Benchmarking {} ({} bytes, {} iterations):",
+                input.display(),
+                file_size,
+                iterations
+            );
+
+            let start = Instant::now();
+            for _ in 0..iterations {
+                let _compressed = if args.slower {
+                    encode_best(&file_data)
+                } else if args.faster {
+                    encode(&file_data)
+                } else {
+                    encode_better(&file_data)
+                };
+            }
+            let elapsed = start.elapsed();
+
+            let avg_time = elapsed.as_secs_f64() / iterations as f64;
+            let throughput = file_size as f64 / avg_time / 1024.0 / 1024.0;
+
+            println!(
+                "  Average: {:.3}s per iteration ({:.2} MB/s)",
+                avg_time, throughput
+            );
+        } else {
+            // Stream mode benchmark
+            println!(
+                "Benchmarking {} ({} bytes, {} iterations):",
+                input.display(),
+                file_size,
+                iterations
+            );
+
+            let start = Instant::now();
+            for _ in 0..iterations {
+                let mut output = Vec::new();
+                let mut s2_writer = Writer::with_block_size(&mut output, block_size);
+                s2_writer.write_all(&file_data)?;
+                s2_writer.flush()?;
+            }
+            let elapsed = start.elapsed();
+
+            let avg_time = elapsed.as_secs_f64() / iterations as f64;
+            let throughput = file_size as f64 / avg_time / 1024.0 / 1024.0;
+
+            println!(
+                "  Average: {:.3}s per iteration ({:.2} MB/s)",
+                avg_time, throughput
+            );
+        }
     }
 
     Ok(())
@@ -290,10 +369,58 @@ fn compress_file(input_path: &str, args: &Args, block_size: usize, pad_size: usi
         }
     }
 
+    // Verify compressed file if requested
+    if args.verify && output != Path::new("-") {
+        verify_compressed_file(&input, &output)?;
+    }
+
     // Remove source file if requested
     if args.rm && output != Path::new("-") {
         fs::remove_file(&input)
             .with_context(|| format!("Failed to remove source file: {}", input.display()))?;
+    }
+
+    Ok(())
+}
+
+fn verify_compressed_file(original: &Path, compressed: &Path) -> Result<()> {
+    // Read original file
+    let mut original_data = Vec::new();
+    File::open(original)
+        .with_context(|| {
+            format!(
+                "Failed to open original file for verification: {}",
+                original.display()
+            )
+        })?
+        .read_to_end(&mut original_data)?;
+
+    // Decompress compressed file
+    let compressed_file = File::open(compressed).with_context(|| {
+        format!(
+            "Failed to open compressed file for verification: {}",
+            compressed.display()
+        )
+    })?;
+
+    let mut reader = Reader::new(compressed_file);
+    let mut decompressed_data = Vec::new();
+    reader
+        .read_to_end(&mut decompressed_data)
+        .with_context(|| {
+            format!(
+                "Failed to decompress file for verification: {}",
+                compressed.display()
+            )
+        })?;
+
+    // Compare
+    if original_data != decompressed_data {
+        anyhow::bail!(
+            "Verification failed: decompressed data does not match original (original: {} bytes, decompressed: {} bytes)",
+            original_data.len(),
+            decompressed_data.len()
+        );
     }
 
     Ok(())

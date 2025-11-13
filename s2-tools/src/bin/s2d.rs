@@ -90,8 +90,10 @@ fn main() -> Result<()> {
     if args.cpu.is_some() {
         eprintln!("Warning: --cpu is not yet implemented (single-threaded decompression)");
     }
-    if args.bench.is_some() {
-        eprintln!("Warning: --bench is not yet implemented");
+
+    // Handle benchmark mode
+    if let Some(bench_count) = args.bench {
+        return run_benchmark(&args, bench_count);
     }
 
     // Handle stdin/stdout case
@@ -102,6 +104,83 @@ fn main() -> Result<()> {
     // Decompress each file
     for file in &args.files {
         decompress_file(file, &args)?;
+    }
+
+    Ok(())
+}
+
+fn run_benchmark(args: &Args, iterations: usize) -> Result<()> {
+    use std::time::Instant;
+
+    for file_path in &args.files {
+        if file_path == "-" {
+            anyhow::bail!("Cannot benchmark stdin");
+        }
+
+        let input = PathBuf::from(file_path);
+        if !input.exists() {
+            anyhow::bail!("File not found: {}", file_path);
+        }
+
+        // Read compressed file into memory
+        let mut file_data = Vec::new();
+        File::open(&input)
+            .with_context(|| format!("Failed to open file: {}", input.display()))?
+            .read_to_end(&mut file_data)?;
+
+        let compressed_size = file_data.len();
+
+        if args.block {
+            // Block mode benchmark
+            println!(
+                "Benchmarking {} ({} bytes compressed, {} iterations):",
+                input.display(),
+                compressed_size,
+                iterations
+            );
+
+            let start = Instant::now();
+            let mut decompressed_size = 0;
+            for _ in 0..iterations {
+                let decompressed = decode(&file_data)?;
+                decompressed_size = decompressed.len();
+            }
+            let elapsed = start.elapsed();
+
+            let avg_time = elapsed.as_secs_f64() / iterations as f64;
+            let throughput = decompressed_size as f64 / avg_time / 1024.0 / 1024.0;
+
+            println!(
+                "  Average: {:.3}s per iteration ({:.2} MB/s decompressed)",
+                avg_time, throughput
+            );
+        } else {
+            // Stream mode benchmark
+            println!(
+                "Benchmarking {} ({} bytes compressed, {} iterations):",
+                input.display(),
+                compressed_size,
+                iterations
+            );
+
+            let start = Instant::now();
+            let mut decompressed_size = 0;
+            for _ in 0..iterations {
+                let mut s2_reader = Reader::new(&file_data[..]);
+                let mut output = Vec::new();
+                s2_reader.read_to_end(&mut output)?;
+                decompressed_size = output.len();
+            }
+            let elapsed = start.elapsed();
+
+            let avg_time = elapsed.as_secs_f64() / iterations as f64;
+            let throughput = decompressed_size as f64 / avg_time / 1024.0 / 1024.0;
+
+            println!(
+                "  Average: {:.3}s per iteration ({:.2} MB/s decompressed)",
+                avg_time, throughput
+            );
+        }
     }
 
     Ok(())
