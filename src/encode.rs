@@ -5,7 +5,7 @@
 
 use crate::constants::*;
 use crate::error::{Error, Result};
-use crate::varint::{encode_varint, varint_size};
+use crate::varint::encode_varint;
 
 /// Encoder for S2 compression
 pub struct Encoder;
@@ -131,7 +131,14 @@ pub fn max_encoded_len(src_len: usize) -> Result<usize> {
     }
 
     // Size of the varint encoded block size
-    let mut n = src_len + varint_size(src_len as u64);
+    // Use Go's formula: (bits.Len64(n) + 7) / 7
+    // This is slightly conservative (over-estimates at boundaries like 127, 16383)
+    let bits_needed = if src_len == 0 {
+        0
+    } else {
+        64 - (src_len as u64).leading_zeros() as usize
+    };
+    let mut n = src_len + (bits_needed + 7) / 7;
 
     // Add maximum size of encoding block as literals
     n += literal_extra_size(src_len as i64) as usize;

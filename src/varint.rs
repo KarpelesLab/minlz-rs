@@ -47,6 +47,7 @@ pub fn encode_varint(dst: &mut [u8], mut value: u64) -> usize {
 }
 
 /// Returns the number of bytes needed to encode this value as a varint
+#[allow(dead_code)]
 pub fn varint_size(mut value: u64) -> usize {
     let mut n = 1;
     while value >= 0x80 {
