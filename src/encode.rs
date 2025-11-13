@@ -155,14 +155,13 @@ fn literal_extra_size(n: i64) -> i64 {
     if n == 0 {
         return 0;
     }
-    // Note: emit_literal uses lit.len() - 1 for encoding ranges
-    // So for lit.len() values, the header sizes are:
-    // 1-60: 1 byte, 61-256: 2 bytes, 257-65536: 3 bytes, etc.
+    // Matches Go's literalExtraSize function in s2.go
+    // These ranges are conservative (slightly over-estimate) for MaxEncodedLen
     match n {
-        1..=60 => 1,
-        61..=256 => 2,
-        257..=65536 => 3,
-        65537..=16777216 => 4,
+        1..=59 => 1,
+        60..=255 => 2,
+        256..=65535 => 3,
+        65536..=16777215 => 4,
         _ => 5,
     }
 }
