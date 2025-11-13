@@ -33,8 +33,13 @@ pub fn encode(src: &[u8]) -> Vec<u8> {
     // Write the varint-encoded length of the decompressed bytes
     let d = encode_varint(&mut dst, src.len() as u64);
 
-    eprintln!("DEBUG encode: src.len()={}, max_len={}, varint_bytes={}, available={}",
-              src.len(), max_len, d, max_len - d);
+    eprintln!(
+        "DEBUG encode: src.len()={}, max_len={}, varint_bytes={}, available={}",
+        src.len(),
+        max_len,
+        d,
+        max_len - d
+    );
 
     if src.is_empty() {
         dst.truncate(d);
