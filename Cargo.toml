@@ -1,0 +1,17 @@
+[package]
+name = "minlz"
+version = "0.1.0"
+edition = "2021"
+authors = ["Karpeles Lab Inc."]
+description = "S2 compression format - compatible with klauspost/compress/s2"
+license = "BSD-3-Clause"
+repository = "https://github.com/magicaltux/snappy2-rs"
+
+[lib]
+name = "minlz"
+path = "src/lib.rs"
+
+[dependencies]
+crc32fast = "1.4"
+
+[dev-dependencies]
