@@ -30,6 +30,7 @@ mod crc;
 mod decode;
 mod encode;
 mod error;
+mod index;
 mod reader;
 mod varint;
 mod writer;
@@ -37,6 +38,7 @@ mod writer;
 pub use decode::{decode, decode_len, decode_snappy, Decoder};
 pub use encode::{encode, encode_best, encode_better, max_encoded_len, Encoder};
 pub use error::{Error, Result};
+pub use index::Index;
 pub use reader::Reader;
 pub use writer::Writer;
 
