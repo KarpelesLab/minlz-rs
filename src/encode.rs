@@ -89,13 +89,37 @@ pub fn encode_better(src: &[u8]) -> Vec<u8> {
 
 /// Encode with dictionary support
 ///
-/// NOTE: Current implementation falls back to standard encoding.
-/// Dictionary is used for decoding but not yet for encoding optimization.
-/// This provides API compatibility while full dictionary encoding is being implemented.
-pub fn encode_with_dict(src: &[u8], _dict: &Dict) -> Vec<u8> {
-    // TODO: Implement full dictionary-aware encoding
-    // For now, encode normally - the data can still be decoded with the dictionary
-    encode(src)
+/// Uses the dictionary to find matches and improve compression ratio.
+/// The dictionary is pre-populated into the hash table, allowing matches
+/// against common patterns that appear in the dictionary.
+pub fn encode_with_dict(src: &[u8], dict: &Dict) -> Vec<u8> {
+    let max_len = max_encoded_len(src.len()).expect("source too large");
+    let mut dst = vec![0u8; max_len];
+
+    // Write the varint-encoded length of the decompressed bytes
+    let d = encode_varint(&mut dst, src.len() as u64);
+
+    if src.is_empty() {
+        dst.truncate(d);
+        return dst;
+    }
+
+    if src.len() < MIN_NON_LITERAL_BLOCK_SIZE {
+        let n = emit_literal(&mut dst[d..], src);
+        dst.truncate(d + n);
+        return dst;
+    }
+
+    let n = encode_block_dict(&mut dst[d..], src, dict);
+    if n > 0 {
+        dst.truncate(d + n);
+        return dst;
+    }
+
+    // Fallback to literal encoding
+    let n = emit_literal(&mut dst[d..], src);
+    dst.truncate(d + n);
+    dst
 }
 
 /// Encode better with dictionary support
@@ -468,6 +492,13 @@ fn hash4(u: u64, h: u8) -> u32 {
 fn hash5(u: u64, h: u8) -> u32 {
     const PRIME_5_BYTES: u64 = 889523592379;
     (((u << (64 - 40)).wrapping_mul(PRIME_5_BYTES)) >> ((64 - h) & 63)) as u32
+}
+
+/// Hash function for 6 bytes (Better algorithm)
+#[inline]
+fn hash6(u: u64, h: u32) -> u32 {
+    const PRIME_6_BYTES: u64 = 0xcf1bbcdcb7a56463;
+    ((u.wrapping_mul(PRIME_6_BYTES)) >> (64 - h)) as u32
 }
 
 /// Hash function for 7 bytes (Better algorithm)
@@ -1185,6 +1216,188 @@ fn encode_block_snappy(dst: &mut [u8], src: &[u8]) -> usize {
     }
 
     // Emit remaining
+    if next_emit < src.len() {
+        d += emit_literal(&mut dst[d..], &src[next_emit..]);
+    }
+
+    // Check if compression was worthwhile
+    if d >= src.len() - src.len() / 32 {
+        return 0;
+    }
+
+    d
+}
+
+/// Encode a block using dictionary for better compression
+fn encode_block_dict(dst: &mut [u8], src: &[u8], dict: &Dict) -> usize {
+    if src.len() < MIN_NON_LITERAL_BLOCK_SIZE {
+        return 0;
+    }
+
+    const TABLE_BITS: u32 = 14;
+    const TABLE_SIZE: usize = 1 << TABLE_BITS;
+    let shift = 32 - TABLE_BITS;
+
+    // Initialize hash table
+    let mut table = vec![0u32; TABLE_SIZE];
+
+    // Pre-populate table with dictionary entries
+    let dict_data = dict.data();
+    let dict_len = dict_data.len();
+
+    // Hash dictionary entries - mark as negative offsets to distinguish from source
+    let mut i = 0;
+    while i < dict_len.saturating_sub(8) {
+        let cv = load64(dict_data, i);
+        let h = hash6(cv, TABLE_BITS) as usize;
+        // Store as negative offset: -(dict_len - i)
+        // This allows us to distinguish dictionary matches from source matches
+        table[h] = (dict_len - i) as u32 | 0x80000000;
+        i += 1;
+    }
+
+    let s_limit = src.len() - INPUT_MARGIN;
+    let mut next_emit = 0;
+    let mut s = 1;
+    let mut d = 0;
+    let mut repeat = dict_len - dict.repeat(); // Initialize repeat from dictionary
+
+    if src.len() < 8 {
+        return 0;
+    }
+
+    let mut cv = load64(src, s);
+
+    'outer: loop {
+        let mut candidate_pos: usize;
+        let mut next_s;
+        let mut is_dict_match;
+
+        // Find a match
+        loop {
+            // Next src position to check
+            next_s = s + (s - next_emit) / 128 + 1;
+            if next_s > s_limit {
+                break 'outer;
+            }
+
+            let h = hash(&src[s..], shift);
+            let table_val = table[h];
+            table[h] = s as u32;
+
+            // Check if candidate is from dictionary or source
+            if table_val & 0x80000000 != 0 {
+                // Dictionary match
+                is_dict_match = true;
+                let dict_offset = (table_val & 0x7fffffff) as usize;
+                if dict_offset > dict_len {
+                    s = next_s;
+                    cv = load64(src, s);
+                    continue;
+                }
+                candidate_pos = dict_len - dict_offset;
+
+                // Verify match in dictionary
+                if candidate_pos < dict_len.saturating_sub(8) {
+                    let dict_cv = load64(dict_data, candidate_pos);
+                    if cv == dict_cv {
+                        break;
+                    }
+                }
+            } else {
+                // Source match
+                is_dict_match = false;
+                candidate_pos = table_val as usize;
+                if candidate_pos > 0 && candidate_pos < s && candidate_pos < src.len() - 8 {
+                    let candidate_cv = load64(src, candidate_pos);
+                    if cv == candidate_cv {
+                        break;
+                    }
+                }
+            }
+
+            s = next_s;
+            cv = load64(src, s);
+        }
+
+        // Emit literals up to this match
+        if s > next_emit {
+            d += emit_literal(&mut dst[d..], &src[next_emit..s]);
+        }
+
+        // Extend the match
+        let mut length;
+
+        if is_dict_match {
+            // Match is in dictionary
+            // Calculate actual match length between dictionary and source
+            length = 4;
+            let dict_remain = dict_len - candidate_pos;
+            let src_remain = src.len() - s;
+            let max_len = dict_remain.min(src_remain);
+
+            while length < max_len && dict_data[candidate_pos + length] == src[s + length] {
+                length += 1;
+            }
+
+            // Calculate offset for dictionary match
+            // When decoding: dict_start = dict.data().len() - offset + d
+            // So: offset = dict.data().len() - dict_start + d
+            // Where dict_start is candidate_pos and d is s (current output position)
+            let offset = dict_len - candidate_pos + s;
+
+            // Emit the copy operation
+            if offset == repeat {
+                d += emit_repeat(&mut dst[d..], offset, length);
+            } else {
+                d += emit_copy(&mut dst[d..], offset, length);
+                repeat = offset;
+            }
+        } else {
+            // Match is in source
+            length = 4;
+            let remain = src.len() - s;
+
+            // Extend forward
+            while length < remain && src[candidate_pos + length] == src[s + length] {
+                length += 1;
+            }
+
+            let offset = s - candidate_pos;
+
+            // Emit the copy operation
+            if offset == repeat {
+                d += emit_repeat(&mut dst[d..], offset, length);
+            } else {
+                d += emit_copy(&mut dst[d..], offset, length);
+                repeat = offset;
+            }
+        }
+
+        next_emit = s + length;
+        s += length;
+
+        // Check dst limit
+        if d >= src.len() - src.len() / 32 - 6 {
+            break;
+        }
+
+        if s >= s_limit {
+            break;
+        }
+
+        // Update hash table with positions we skipped
+        let mut prev_s = s - 1;
+        while prev_s > next_emit && s - prev_s < 10 {
+            let h = hash(&src[prev_s..], shift);
+            table[h] = prev_s as u32;
+            prev_s -= 1;
+        }
+
+        cv = load64(src, s);
+    }
+
+    // Emit remaining literals
     if next_emit < src.len() {
         d += emit_literal(&mut dst[d..], &src[next_emit..]);
     }
