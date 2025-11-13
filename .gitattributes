@@ -1,0 +1,6 @@
+# Ensure consistent line endings across all platforms
+* text=auto
+
+# Test data files should always use LF line endings
+testdata/*.txt text eol=lf
+testdata/*.rawsnappy binary
