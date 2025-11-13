@@ -1,11 +1,11 @@
 [package]
 name = "minlz"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 authors = ["Karpeles Lab Inc."]
 description = "S2 compression format - compatible with klauspost/compress/s2"
 license = "BSD-3-Clause"
-repository = "https://github.com/magicaltux/snappy2-rs"
+repository = "https://github.com/KarpelesLab/minlz-rs"
 
 [lib]
 name = "minlz"

@@ -1,6 +1,6 @@
 # minlz
 
-A high-performance Rust implementation of the S2 compression format, providing binary compatibility with the Go implementation at [github.com/klauspost/compress/s2](https://github.com/klauspost/compress/s2).
+A high-performance Rust implementation of the S2 compression format, providing binary compatibility with the Go implementation at [github.com/klauspost/compress/s2](https://github.com/klauspost/compress/tree/master/s2).
 
 ## Features
 
@@ -10,7 +10,7 @@ A high-performance Rust implementation of the S2 compression format, providing b
 - **Stream Format**: Full Reader/Writer support with CRC32 validation
 - **Block Format**: Simple block-based compression for known-size data
 - **Pure Rust**: Written entirely in safe Rust with no unsafe code
-- **Well Tested**: 41 tests, fuzz testing, and property-based testing
+- **Well Tested**: 48 tests, fuzz testing, and property-based testing
 
 ## S2 Format
 
@@ -210,7 +210,7 @@ This implementation includes comprehensive testing infrastructure:
 ### Run Tests
 
 ```bash
-# Unit and integration tests (41 tests)
+# Unit and integration tests (48 tests)
 cargo test
 
 # Property-based tests (proptest)
@@ -228,7 +228,7 @@ cargo fuzz run fuzz_stream
 
 ### Test Coverage
 
-- **41 Unit/Integration Tests**: Core functionality and edge cases
+- **48 Unit/Integration Tests**: Core functionality and edge cases
 - **10 Property-Based Tests**: Using proptest for randomized testing
   - Roundtrip verification for all compression levels
   - Stream format validation
@@ -261,7 +261,7 @@ Contributions are welcome! Please ensure:
 3. No clippy warnings (`cargo clippy`)
 4. Binary compatibility with Go implementation is maintained
 
-The current implementation passes all 41 tests, is formatted with rustfmt, and has been checked with clippy.
+The current implementation passes all 48 tests, is formatted with rustfmt, and has been checked with clippy.
 
 ## Current Status
 
@@ -279,7 +279,7 @@ The current implementation passes all 41 tests, is formatted with rustfmt, and h
 - ✓ Standard compression algorithm (hash6 table)
 - ✓ Better compression algorithm (dual hash tables, hash4/hash7)
 - ✓ Best compression algorithm (larger hash tables, hash5/hash8)
-- ✓ Comprehensive test suite (41 tests + 10 property tests + 3 fuzz targets)
+- ✓ Comprehensive test suite (48 tests + 10 property tests + 3 fuzz targets)
 - ✓ Binary compatibility verified with Go implementation
 - ✓ Performance benchmarking suite
 
@@ -292,7 +292,7 @@ See [MISSING_FEATURES.md](MISSING_FEATURES.md) for detailed analysis of missing 
 
 ## Project Goals
 
-1. **Binary Compatibility**: 100% compatible with [github.com/klauspost/compress/s2](https://github.com/klauspost/compress/s2)
+1. **Binary Compatibility**: 100% compatible with [github.com/klauspost/compress/s2](https://github.com/klauspost/compress/tree/master/s2)
 2. **High Performance**: Match or exceed Go implementation performance
 3. **Production Ready**: Comprehensive testing, fuzzing, and validation
 4. **Safe Rust**: No unsafe code, leveraging Rust's memory safety guarantees
