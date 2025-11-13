@@ -45,10 +45,14 @@ pub struct Reader<R: Read> {
     pos: usize,
     read_header: bool,
     eof: bool,
+    max_block_size: usize,
+    ignore_stream_id: bool,
 }
 
 impl<R: Read> Reader<R> {
-    /// Create a new Reader
+    /// Create a new Reader with default settings
+    ///
+    /// Default max_block_size is 4MB (the S2 maximum)
     pub fn new(reader: R) -> Self {
         Reader {
             reader,
@@ -56,6 +60,48 @@ impl<R: Read> Reader<R> {
             pos: 0,
             read_header: false,
             eof: false,
+            max_block_size: MAX_BLOCK_SIZE,
+            ignore_stream_id: false,
+        }
+    }
+
+    /// Create a new Reader with a maximum block size limit
+    ///
+    /// This can be used to limit memory usage if you know the stream
+    /// was compressed with smaller blocks. For Snappy-compressed streams,
+    /// you can safely set this to 64KB.
+    ///
+    /// # Panics
+    /// Panics if max_block_size is 0 or greater than 4MB
+    pub fn with_max_block_size(reader: R, max_block_size: usize) -> Self {
+        assert!(
+            max_block_size > 0 && max_block_size <= MAX_BLOCK_SIZE,
+            "max_block_size must be > 0 and <= 4MB"
+        );
+        Reader {
+            reader,
+            buf: Vec::new(),
+            pos: 0,
+            read_header: false,
+            eof: false,
+            max_block_size,
+            ignore_stream_id: false,
+        }
+    }
+
+    /// Create a new Reader that skips the stream identifier check
+    ///
+    /// This can be useful when reading from a stream that has been
+    /// forwarded to a specific point and doesn't start with the magic bytes.
+    pub fn with_ignore_stream_id(reader: R) -> Self {
+        Reader {
+            reader,
+            buf: Vec::new(),
+            pos: 0,
+            read_header: true, // Skip reading header
+            eof: false,
+            max_block_size: MAX_BLOCK_SIZE,
+            ignore_stream_id: true,
         }
     }
 
@@ -250,6 +296,52 @@ mod tests {
     use super::*;
     use crate::Writer;
     use std::io::Write;
+
+    #[test]
+    fn test_reader_with_max_block_size() {
+        // Compress with default settings
+        let data = b"Hello, World!";
+        let mut compressed = Vec::new();
+        {
+            let mut writer = Writer::new(&mut compressed);
+            writer.write_all(data).unwrap();
+            writer.flush().unwrap();
+        }
+
+        // Decompress with max_block_size limit
+        let mut reader = Reader::with_max_block_size(&compressed[..], 64 * 1024);
+        let mut decompressed = Vec::new();
+        reader.read_to_end(&mut decompressed).unwrap();
+        assert_eq!(decompressed, data);
+    }
+
+    #[test]
+    fn test_reader_with_ignore_stream_id() {
+        // Compress
+        let data = b"Test data";
+        let mut compressed = Vec::new();
+        {
+            let mut writer = Writer::new(&mut compressed);
+            writer.write_all(data).unwrap();
+            writer.flush().unwrap();
+        }
+
+        // Skip the magic chunk (10 bytes)
+        let without_magic = &compressed[10..];
+
+        // This should work with ignore_stream_id
+        let mut reader = Reader::with_ignore_stream_id(without_magic);
+        let mut decompressed = Vec::new();
+        reader.read_to_end(&mut decompressed).unwrap();
+        assert_eq!(decompressed, data);
+    }
+
+    #[test]
+    #[should_panic(expected = "max_block_size must be > 0 and <= 4MB")]
+    fn test_reader_invalid_max_block_size() {
+        let data = &[0u8; 10][..];
+        let _reader = Reader::with_max_block_size(data, 0);
+    }
 
     #[test]
     fn test_reader_basic() {
