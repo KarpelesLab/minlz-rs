@@ -10,7 +10,7 @@ A high-performance Rust implementation of the S2 compression format, providing b
 - **Stream Format**: Full Reader/Writer support with CRC32 validation
 - **Block Format**: Simple block-based compression for known-size data
 - **Pure Rust**: Written entirely in safe Rust with no unsafe code
-- **Well Tested**: 48 tests, fuzz testing, and property-based testing
+- **Well Tested**: 50 tests, fuzz testing, and property-based testing
 
 ## S2 Format
 
@@ -279,13 +279,16 @@ The current implementation passes all 48 tests, is formatted with rustfmt, and h
 - ✓ Standard compression algorithm (hash6 table)
 - ✓ Better compression algorithm (dual hash tables, hash4/hash7)
 - ✓ Best compression algorithm (larger hash tables, hash5/hash8)
-- ✓ Comprehensive test suite (48 tests + 10 property tests + 3 fuzz targets)
+- ✓ Index support (offset tracking for seeking)
+- ✓ Comprehensive test suite (50 tests + 10 property tests + 3 fuzz targets)
 - ✓ Binary compatibility verified with Go implementation
 - ✓ Performance benchmarking suite
 
+**Partially Implemented:**
+- ⚠️ Index support for seeking (core structure complete, Reader integration pending)
+
 **Not Yet Implemented:**
 - ✗ Dictionary support (LOW priority - rarely used)
-- ✗ Index support for seeking (MEDIUM priority)
 - ✗ Concurrent compression (LOW-MEDIUM priority)
 
 See [MISSING_FEATURES.md](MISSING_FEATURES.md) for detailed analysis of missing features.
