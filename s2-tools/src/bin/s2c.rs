@@ -5,7 +5,7 @@
 use anyhow::{Context, Result};
 use clap::Parser;
 use indicatif::{ProgressBar, ProgressStyle};
-use minlz::{encode, encode_best, encode_better, Writer};
+use minlz::{encode, encode_best, encode_better, ConcurrentWriter, Writer};
 use std::fs::{self, File};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
@@ -48,7 +48,7 @@ struct Args {
     quiet: bool,
 
     /// Block size (e.g., 64K, 256K, 1M, 4M)
-    #[arg(long, default_value = "1M")]
+    #[arg(long, default_value = "4M")]
     blocksize: String,
 
     /// Generate Snappy-compatible output
@@ -58,6 +58,30 @@ struct Args {
     /// Compress as a single block (loads into memory)
     #[arg(long)]
     block: bool,
+
+    /// Add seek index (default: true, use --index=false to disable)
+    #[arg(long, default_value_t = true, num_args = 0..=1, default_missing_value = "true", action = clap::ArgAction::Set)]
+    index: bool,
+
+    /// Pad size to a multiple of this value (e.g., 500, 64K, 256K, 1M, 4M)
+    #[arg(long, default_value = "1")]
+    pad: String,
+
+    /// Number of concurrent compression threads
+    #[arg(long)]
+    cpu: Option<usize>,
+
+    /// Verify written files by decompressing them
+    #[arg(long)]
+    verify: bool,
+
+    /// Run benchmark n times (no output will be written)
+    #[arg(long)]
+    bench: Option<usize>,
+
+    /// Recompress Snappy or S2 input
+    #[arg(long)]
+    recomp: bool,
 }
 
 fn main() -> Result<()> {
@@ -76,6 +100,24 @@ fn main() -> Result<()> {
         anyhow::bail!("Cannot use -c with multiple input files");
     }
 
+    // Parse pad size
+    let pad_size = if args.pad != "1" {
+        parse_size(&args.pad).context("Invalid pad size")?
+    } else {
+        1
+    };
+
+    // Check for unsupported features
+    if args.verify {
+        eprintln!("Warning: --verify is not yet implemented");
+    }
+    if args.bench.is_some() {
+        eprintln!("Warning: --bench is not yet implemented");
+    }
+    if args.recomp {
+        eprintln!("Warning: --recomp is not yet implemented");
+    }
+
     // Parse block size
     let block_size = parse_size(&args.blocksize).context("Invalid block size")?;
 
@@ -86,7 +128,7 @@ fn main() -> Result<()> {
 
     // Compress each file
     for file in &args.files {
-        compress_file(file, &args, block_size)?;
+        compress_file(file, &args, block_size, pad_size)?;
     }
 
     Ok(())
@@ -123,7 +165,7 @@ fn compress_stdio(args: &Args) -> Result<()> {
     Ok(())
 }
 
-fn compress_file(input_path: &str, args: &Args, block_size: usize) -> Result<()> {
+fn compress_file(input_path: &str, args: &Args, block_size: usize, pad_size: usize) -> Result<()> {
     let input = PathBuf::from(input_path);
 
     if !input.exists() {
@@ -201,37 +243,27 @@ fn compress_file(input_path: &str, args: &Args, block_size: usize) -> Result<()>
         if output == Path::new("-") {
             let stdout = io::stdout();
             let mut stdout_lock = stdout.lock();
-            let mut s2_writer = Writer::with_block_size(&mut stdout_lock, block_size);
 
-            let mut buffer = vec![0u8; 128 * 1024];
-            loop {
-                let n = input_file.read(&mut buffer)?;
-                if n == 0 {
-                    break;
-                }
-                s2_writer.write_all(&buffer[..n])?;
-                if let Some(ref pb) = pb {
-                    pb.inc(n as u64);
-                }
-            }
-            s2_writer.flush()?;
+            compress_stream(
+                &mut input_file,
+                &mut stdout_lock,
+                args,
+                block_size,
+                pad_size,
+                pb.as_ref(),
+            )?;
         } else {
-            let output_file = File::create(&output)
+            let mut output_file = File::create(&output)
                 .with_context(|| format!("Failed to create output file: {}", output.display()))?;
-            let mut s2_writer = Writer::with_block_size(output_file, block_size);
 
-            let mut buffer = vec![0u8; 128 * 1024];
-            loop {
-                let n = input_file.read(&mut buffer)?;
-                if n == 0 {
-                    break;
-                }
-                s2_writer.write_all(&buffer[..n])?;
-                if let Some(ref pb) = pb {
-                    pb.inc(n as u64);
-                }
-            }
-            s2_writer.flush()?;
+            compress_stream(
+                &mut input_file,
+                &mut output_file,
+                args,
+                block_size,
+                pad_size,
+                pb.as_ref(),
+            )?;
         }
     }
 
@@ -263,6 +295,194 @@ fn compress_file(input_path: &str, args: &Args, block_size: usize) -> Result<()>
         fs::remove_file(&input)
             .with_context(|| format!("Failed to remove source file: {}", input.display()))?;
     }
+
+    Ok(())
+}
+
+fn compress_stream<R: Read, W: Write>(
+    input: &mut R,
+    output: &mut W,
+    args: &Args,
+    block_size: usize,
+    pad_size: usize,
+    pb: Option<&ProgressBar>,
+) -> Result<()> {
+    let buffer_size = 128 * 1024;
+    let mut buffer = vec![0u8; buffer_size];
+
+    // Use concurrent compression if --cpu > 1
+    if let Some(cpu_count) = args.cpu {
+        if cpu_count > 1 {
+            // For concurrent writer, we need to handle padding separately
+            // since ConcurrentWriter doesn't support padding directly
+            if pad_size > 1 {
+                // Write to a buffer, then add padding
+                let mut temp_output = Vec::new();
+                let mut s2_writer =
+                    ConcurrentWriter::with_block_size(&mut temp_output, block_size, cpu_count);
+
+                loop {
+                    let n = input.read(&mut buffer)?;
+                    if n == 0 {
+                        break;
+                    }
+                    s2_writer.write_all(&buffer[..n])?;
+                    if let Some(pb) = pb {
+                        pb.inc(n as u64);
+                    }
+                }
+                s2_writer.flush()?;
+                drop(s2_writer);
+
+                // Apply padding if needed
+                let padding_needed = calc_padding(temp_output.len(), pad_size);
+                if padding_needed > 0 {
+                    write_padding(&mut temp_output, padding_needed)?;
+                }
+
+                // Apply index if needed
+                if args.index {
+                    // Note: Index support requires deeper integration with the writer
+                    // For now, we skip index when using concurrent compression
+                    eprintln!("Warning: --index is not supported with --cpu > 1");
+                }
+
+                output.write_all(&temp_output)?;
+            } else {
+                let mut s2_writer =
+                    ConcurrentWriter::with_block_size(output, block_size, cpu_count);
+
+                loop {
+                    let n = input.read(&mut buffer)?;
+                    if n == 0 {
+                        break;
+                    }
+                    s2_writer.write_all(&buffer[..n])?;
+                    if let Some(pb) = pb {
+                        pb.inc(n as u64);
+                    }
+                }
+                s2_writer.flush()?;
+
+                if args.index {
+                    eprintln!("Warning: --index is not supported with --cpu > 1");
+                }
+            }
+            return Ok(());
+        }
+    }
+
+    // Single-threaded compression
+    if pad_size > 1 && args.index {
+        // Padding + index: need to use temp buffer
+        let mut temp_output = Vec::new();
+        let mut s2_writer = Writer::with_index_and_block_size(&mut temp_output, block_size);
+
+        loop {
+            let n = input.read(&mut buffer)?;
+            if n == 0 {
+                break;
+            }
+            s2_writer.write_all(&buffer[..n])?;
+            if let Some(pb) = pb {
+                pb.inc(n as u64);
+            }
+        }
+        s2_writer.flush()?;
+        drop(s2_writer);
+
+        // Apply padding manually after index
+        let padding_needed = calc_padding(temp_output.len(), pad_size);
+        if padding_needed > 0 {
+            write_padding(&mut temp_output, padding_needed)?;
+        }
+
+        output.write_all(&temp_output)?;
+    } else if pad_size > 1 {
+        // Padding only
+        let mut s2_writer = Writer::with_padding(output, pad_size);
+
+        loop {
+            let n = input.read(&mut buffer)?;
+            if n == 0 {
+                break;
+            }
+            s2_writer.write_all(&buffer[..n])?;
+            if let Some(pb) = pb {
+                pb.inc(n as u64);
+            }
+        }
+        s2_writer.flush()?;
+    } else if args.index {
+        // Index only
+        let mut s2_writer = Writer::with_index_and_block_size(output, block_size);
+
+        loop {
+            let n = input.read(&mut buffer)?;
+            if n == 0 {
+                break;
+            }
+            s2_writer.write_all(&buffer[..n])?;
+            if let Some(pb) = pb {
+                pb.inc(n as u64);
+            }
+        }
+        s2_writer.flush()?;
+    } else {
+        // No padding, no index
+        let mut s2_writer = Writer::with_block_size(output, block_size);
+
+        loop {
+            let n = input.read(&mut buffer)?;
+            if n == 0 {
+                break;
+            }
+            s2_writer.write_all(&buffer[..n])?;
+            if let Some(pb) = pb {
+                pb.inc(n as u64);
+            }
+        }
+        s2_writer.flush()?;
+    }
+
+    Ok(())
+}
+
+fn calc_padding(written: usize, want_multiple: usize) -> usize {
+    if want_multiple <= 1 {
+        return 0;
+    }
+    let leftover = written % want_multiple;
+    if leftover == 0 {
+        return 0;
+    }
+    want_multiple - leftover
+}
+
+fn write_padding<W: Write>(output: &mut W, padding_needed: usize) -> Result<()> {
+    if padding_needed == 0 {
+        return Ok(());
+    }
+
+    const SKIPPABLE_FRAME_HEADER: usize = 4;
+    if padding_needed < SKIPPABLE_FRAME_HEADER {
+        anyhow::bail!("padding size too small");
+    }
+
+    // Write chunk type for padding (0xfe)
+    output.write_all(&[0xfe])?;
+
+    // Write chunk length (3 bytes, little-endian)
+    let data_len = (padding_needed - SKIPPABLE_FRAME_HEADER) as u32;
+    output.write_all(&[
+        (data_len & 0xff) as u8,
+        ((data_len >> 8) & 0xff) as u8,
+        ((data_len >> 16) & 0xff) as u8,
+    ])?;
+
+    // Write padding data (zeros or pattern)
+    let pattern = vec![0u8; data_len as usize];
+    output.write_all(&pattern)?;
 
     Ok(())
 }

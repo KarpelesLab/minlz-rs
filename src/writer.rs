@@ -10,6 +10,7 @@ use std::io::{self, Write};
 use crate::constants::*;
 use crate::crc::crc;
 use crate::encode::encode;
+use crate::index::Index;
 
 /// Writer compresses data using the S2 stream format
 ///
@@ -38,8 +39,10 @@ pub struct Writer<W: Write> {
     buf: Vec<u8>,
     block_size: usize,
     wrote_header: bool,
-    padding: usize,     // If > 1, pad output to be a multiple of this value
-    total_written: u64, // Total bytes written to underlying writer (for padding calculation)
+    padding: usize,          // If > 1, pad output to be a multiple of this value
+    total_written: u64,      // Total bytes written to underlying writer (for padding calculation)
+    index: Option<Index>,    // Optional index for seeking support
+    uncompressed_total: u64, // Total uncompressed bytes written
 }
 
 impl<W: Write> Writer<W> {
@@ -61,6 +64,47 @@ impl<W: Write> Writer<W> {
             wrote_header: false,
             padding: 0,
             total_written: 0,
+            index: None,
+            uncompressed_total: 0,
+        }
+    }
+
+    /// Create a new Writer with index support enabled
+    ///
+    /// The index allows seeking in the compressed stream by recording
+    /// compressed/uncompressed offset pairs at regular intervals.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use minlz::Writer;
+    /// use std::io::Write;
+    ///
+    /// let mut compressed = Vec::new();
+    /// {
+    ///     let mut writer = Writer::with_index(&mut compressed);
+    ///     writer.write_all(b"Hello, World!").unwrap();
+    /// } // Index is appended when Writer is dropped
+    /// ```
+    pub fn with_index(writer: W) -> Self {
+        Self::with_index_and_block_size(writer, DEFAULT_BLOCK_SIZE)
+    }
+
+    /// Create a new Writer with index support and custom block size
+    pub fn with_index_and_block_size(writer: W, block_size: usize) -> Self {
+        let block_size = block_size.clamp(MIN_BLOCK_SIZE, MAX_BLOCK_SIZE);
+        let mut index = Index::new();
+        index.reset(block_size as i64);
+
+        Writer {
+            writer,
+            buf: Vec::new(),
+            block_size,
+            wrote_header: false,
+            padding: 0,
+            total_written: 0,
+            index: Some(index),
+            uncompressed_total: 0,
         }
     }
 
@@ -98,6 +142,20 @@ impl<W: Write> Writer<W> {
             wrote_header: false,
             padding,
             total_written: 0,
+            index: None,
+            uncompressed_total: 0,
+        }
+    }
+
+    /// Enable index tracking on this writer
+    ///
+    /// This can be called after construction to enable index support.
+    /// The index will be appended when the writer is dropped.
+    pub fn enable_index(&mut self) {
+        if self.index.is_none() {
+            let mut index = Index::new();
+            index.reset(self.block_size as i64);
+            self.index = Some(index);
         }
     }
 
@@ -118,6 +176,21 @@ impl<W: Write> Writer<W> {
         }
 
         self.write_header()?;
+
+        // Record index entry before writing this block
+        if let Some(ref mut index) = self.index {
+            let compressed_offset = self.total_written as i64;
+            let uncompressed_offset = self.uncompressed_total as i64;
+            index
+                .add(compressed_offset, uncompressed_offset)
+                .map_err(|e| {
+                    io::Error::new(io::ErrorKind::InvalidData, format!("index error: {}", e))
+                })?;
+        }
+
+        // Track uncompressed bytes
+        let uncompressed_size = self.buf.len() as u64;
+        self.uncompressed_total += uncompressed_size;
 
         // Compress the block
         let compressed = encode(&self.buf);
@@ -165,6 +238,10 @@ impl<W: Write> Writer<W> {
         self.buf.clear();
         self.wrote_header = false;
         self.total_written = 0;
+        self.uncompressed_total = 0;
+        if let Some(ref mut index) = self.index {
+            index.reset(self.block_size as i64);
+        }
         std::mem::replace(&mut self.writer, writer)
     }
 
@@ -241,6 +318,27 @@ impl<W: Write> Writer<W> {
         Ok(())
     }
 
+    /// Apply index if enabled (called on close/drop, after flushing)
+    fn apply_index(&mut self) -> io::Result<()> {
+        if let Some(ref mut index) = self.index {
+            // Write index as a skippable frame
+            let mut index_data = Vec::new();
+            index
+                .append_to(
+                    &mut index_data,
+                    self.uncompressed_total as i64,
+                    self.total_written as i64,
+                )
+                .map_err(|e| {
+                    io::Error::new(io::ErrorKind::InvalidData, format!("index error: {}", e))
+                })?;
+
+            self.writer.write_all(&index_data)?;
+            self.total_written += index_data.len() as u64;
+        }
+        Ok(())
+    }
+
     /// Apply padding if needed (called on close/drop)
     fn apply_padding(&mut self) -> io::Result<()> {
         if self.padding > 1 {
@@ -298,6 +396,8 @@ impl<W: Write> Drop for Writer<W> {
     fn drop(&mut self) {
         // Flush any remaining data
         let _ = self.flush();
+        // Apply index if configured (must be before padding)
+        let _ = self.apply_index();
         // Apply padding if configured
         let _ = self.apply_padding();
     }
@@ -412,5 +512,115 @@ mod tests {
         let mut decompressed = Vec::new();
         reader.read_to_end(&mut decompressed).unwrap();
         assert_eq!(decompressed, data);
+    }
+
+    #[test]
+    fn test_writer_with_index_basic() {
+        // Start with tiny data to debug
+        let data = vec![b'A'; 100]; // Just 100 bytes
+        let mut compressed = Vec::new();
+        {
+            let mut writer = Writer::with_index(&mut compressed);
+            writer.write_all(&data).unwrap();
+        } // Drop applies index
+
+        // Should have index appended
+        assert!(compressed.len() > 0);
+
+        // Check for index trailer
+        let trailer = b"\x00xdi2s";
+        let has_index = compressed
+            .windows(trailer.len())
+            .any(|window| window == trailer);
+        assert!(has_index, "Index should be present in compressed data");
+    }
+
+    #[test]
+    fn test_writer_with_index() {
+        // Use smaller data to avoid potential stack issues
+        let data = vec![b'A'; 50_000]; // 50KB of data
+        let mut compressed = Vec::new();
+        {
+            let mut writer = Writer::with_index(&mut compressed);
+            writer.write_all(&data).unwrap();
+        } // Drop applies index
+
+        // Should have index appended
+        assert!(compressed.len() > 0);
+
+        // Check for index trailer - search from end
+        let trailer = b"\x00xdi2s";
+        let mut found_index = false;
+        if compressed.len() >= trailer.len() {
+            for i in (compressed.len() - 1000).max(0)..=compressed.len() - trailer.len() {
+                if &compressed[i..i + trailer.len()] == trailer {
+                    found_index = true;
+                    break;
+                }
+            }
+        }
+        assert!(found_index, "Index should be present in compressed data");
+
+        // Verify decompression works
+        use crate::Reader;
+        use std::io::Read;
+
+        let mut reader = Reader::new(&compressed[..]);
+        let mut decompressed = Vec::new();
+        reader.read_to_end(&mut decompressed).unwrap();
+        assert_eq!(decompressed.len(), data.len());
+    }
+
+    #[test]
+    fn test_writer_enable_index() {
+        let data = vec![b'B'; 30_000]; // 30KB of data
+        let mut compressed = Vec::new();
+        {
+            let mut writer = Writer::new(&mut compressed);
+            writer.enable_index(); // Enable index after construction
+            writer.write_all(&data).unwrap();
+        }
+
+        // Verify the data can still be decompressed
+        use crate::Reader;
+        use std::io::Read;
+
+        let mut reader = Reader::new(&compressed[..]);
+        let mut decompressed = Vec::new();
+        reader.read_to_end(&mut decompressed).unwrap();
+        assert_eq!(decompressed.len(), data.len());
+
+        // Should have index - check last 1000 bytes
+        let trailer = b"\x00xdi2s";
+        let mut found_index = false;
+        if compressed.len() >= trailer.len() {
+            for i in (compressed.len() - 1000).max(0)..=compressed.len() - trailer.len() {
+                if &compressed[i..i + trailer.len()] == trailer {
+                    found_index = true;
+                    break;
+                }
+            }
+        }
+        assert!(found_index, "Index should be present after enable_index()");
+    }
+
+    #[test]
+    fn test_writer_with_index_and_block_size() {
+        let data = vec![b'C'; 60_000]; // 60KB of data
+        let block_size = 16 * 1024; // 16KB blocks (smaller for testing)
+        let mut compressed = Vec::new();
+        {
+            let mut writer = Writer::with_index_and_block_size(&mut compressed, block_size);
+            writer.write_all(&data).unwrap();
+        }
+
+        // Verify decompression
+        use crate::Reader;
+        use std::io::Read;
+
+        let mut reader = Reader::new(&compressed[..]);
+        let mut decompressed = Vec::new();
+        reader.read_to_end(&mut decompressed).unwrap();
+        assert_eq!(decompressed.len(), data.len());
     }
 }

@@ -46,6 +46,22 @@ struct Args {
     /// Decompress as a single block (loads into memory)
     #[arg(long)]
     block: bool,
+
+    /// Return last N bytes (e.g., 92, 64K, 256K, 1M, 4M) - requires index
+    #[arg(long)]
+    tail: Option<String>,
+
+    /// Start at offset (e.g., 92, 64K, 256K, 1M, 4M) - requires index
+    #[arg(long)]
+    offset: Option<String>,
+
+    /// Number of concurrent decompression threads
+    #[arg(long)]
+    cpu: Option<usize>,
+
+    /// Run benchmark n times (no output will be written)
+    #[arg(long)]
+    bench: Option<usize>,
 }
 
 fn main() -> Result<()> {
@@ -58,6 +74,24 @@ fn main() -> Result<()> {
 
     if args.files.len() > 1 && args.stdout {
         anyhow::bail!("Cannot use -c with multiple input files");
+    }
+
+    if args.tail.is_some() && args.offset.is_some() {
+        anyhow::bail!("Cannot use both --tail and --offset");
+    }
+
+    // Check for unsupported features
+    if args.tail.is_some() {
+        eprintln!("Warning: --tail is not yet implemented (requires index support)");
+    }
+    if args.offset.is_some() {
+        eprintln!("Warning: --offset is not yet implemented (requires index support)");
+    }
+    if args.cpu.is_some() {
+        eprintln!("Warning: --cpu is not yet implemented (single-threaded decompression)");
+    }
+    if args.bench.is_some() {
+        eprintln!("Warning: --bench is not yet implemented");
     }
 
     // Handle stdin/stdout case
