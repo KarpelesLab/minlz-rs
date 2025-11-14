@@ -46,14 +46,14 @@ This document compares the performance of the Rust implementation (minlz) agains
 
 | Data Size | Pattern    | Go (MB/s) | Rust (MiB/s) | Rust (MB/s) | Winner      |
 |-----------|------------|-----------|--------------|-------------|-------------|
-| 1KB       | Repeated   | N/A       | 32.3         | 34          | -           |
-| 1KB       | Text       | N/A       | 32.7         | 34          | -           |
-| 10KB      | Repeated   | 7.04      | 291          | 305         | Rust (43x)  |
-| 10KB      | Text       | 7.15      | 285          | 299         | Rust (42x)  |
-| 100KB     | Repeated   | N/A       | 1300         | 1363        | -           |
-| 100KB     | Text       | N/A       | 1310         | 1374        | -           |
+| 1KB       | Repeated   | N/A       | 11.2         | 11.7        | -           |
+| 1KB       | Text       | N/A       | 11.3         | 11.9        | -           |
+| 10KB      | Repeated   | 7.04      | 85.1         | 89.2        | Rust (12x)  |
+| 10KB      | Text       | 7.15      | 111.2        | 116.6       | Rust (16x)  |
+| 100KB     | Repeated   | N/A       | 228.9        | 240.0       | -           |
+| 100KB     | Text       | N/A       | 809.9        | 849.2       | -           |
 
-**Key Finding**: The Rust Best compression mode is 42-43x faster than Go while maintaining the same compression format.
+**Key Finding**: The Rust Best compression mode now produces byte-identical output to Go's s2.EncodeBest, ensuring binary compatibility. Performance is 12-16x faster than Go on medium-sized data where Go benchmarks are available. The implementation properly evaluates multiple match candidates with scoring for optimal compression.
 
 ## Decoding Performance
 
@@ -99,7 +99,7 @@ The Rust implementation uses safe memory handling with Vec allocations but maint
 
 ### Rust Advantages
 1. **Decode Performance**: 1.6-98x faster depending on data pattern
-2. **Best Mode Encoding**: 42-43x faster than Go
+2. **Best Mode Binary Compatibility**: Produces byte-identical output to Go's s2.EncodeBest (12-16x faster where Go benchmarks available)
 3. **Standard Encoding**: Now faster than Go across all test cases
 4. **Random/Sequential Data**: Exceptional performance (36-51 GiB/s)
 
@@ -110,9 +110,9 @@ The Rust implementation uses safe memory handling with Vec allocations but maint
 
 ### Overall Assessment
 
-The Rust implementation demonstrates **exceptional decode performance** (up to 98x faster) and makes the "Best" compression mode practical for real-world use. Recent optimizations have improved standard encoding performance to be faster than Go across all test cases, with particularly impressive gains on sequential data.
+The Rust implementation demonstrates **exceptional decode performance** (up to 98x faster) and **binary compatibility** with Go's Best compression mode. The Best mode implementation now properly evaluates multiple match candidates using Go's scoring algorithm, ensuring identical output for interoperability.
 
-For decode-heavy workloads, the Rust implementation offers massive performance advantages (12-98x faster on most data patterns). For encode-heavy workloads, Rust now matches or exceeds Go in "Standard" and "Best" modes, with Go retaining an edge only in "Better" mode for some patterns.
+For decode-heavy workloads, the Rust implementation offers massive performance advantages (12-98x faster on most data patterns). For encode-heavy workloads, Rust now matches or exceeds Go in "Standard" mode, and provides 12-16x speedup in "Best" mode while maintaining binary compatibility. Go retains an edge in "Better" mode for some patterns.
 
 ## Next Steps
 

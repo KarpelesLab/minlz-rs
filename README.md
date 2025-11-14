@@ -256,8 +256,8 @@ This Rust implementation delivers exceptional performance, often exceeding the G
 | Standard | 10KB      | Random     | 2.1 GiB/s  | 1280 MB/s | 1.7x    |
 | Standard | 100KB     | Text       | 2.2 GiB/s  | 1545 MB/s | 1.5x    |
 | Better   | 10KB      | Text       | 937 MiB/s  | 2232 MB/s | 0.4x    |
-| Best     | 10KB      | Repeated   | 291 MiB/s  | 7 MB/s    | **43x** |
-| Best     | 10KB      | Text       | 285 MiB/s  | 7 MB/s    | **42x** |
+| Best     | 10KB      | Repeated   | 85.1 MiB/s | 7 MB/s    | **12x** |
+| Best     | 10KB      | Text       | 111 MiB/s  | 7 MB/s    | **16x** |
 
 #### Decoding Performance
 
@@ -271,7 +271,7 @@ This Rust implementation delivers exceptional performance, often exceeding the G
 
 **Key Takeaways:**
 - **Decode-heavy workloads**: Rust is 17-98x faster (random/text data)
-- **Best compression mode**: Rust is 42-43x faster, making it practical for production use
+- **Best compression mode**: Binary compatible with Go's s2.EncodeBest, 12-16x faster
 - **Standard encoding**: Faster than Go across all patterns, 1.5-1.7x on larger data
 - **Better mode**: Go currently faster (area for future optimization)
 
