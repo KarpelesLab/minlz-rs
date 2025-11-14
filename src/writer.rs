@@ -594,7 +594,8 @@ mod tests {
         let trailer = b"\x00xdi2s";
         let mut found_index = false;
         if compressed.len() >= trailer.len() {
-            for i in (compressed.len() - 1000).max(0)..=compressed.len() - trailer.len() {
+            let start = compressed.len().saturating_sub(1000);
+            for i in start..=compressed.len() - trailer.len() {
                 if &compressed[i..i + trailer.len()] == trailer {
                     found_index = true;
                     break;
@@ -636,7 +637,8 @@ mod tests {
         let trailer = b"\x00xdi2s";
         let mut found_index = false;
         if compressed.len() >= trailer.len() {
-            for i in (compressed.len() - 1000).max(0)..=compressed.len() - trailer.len() {
+            let start = compressed.len().saturating_sub(1000);
+            for i in start..=compressed.len() - trailer.len() {
                 if &compressed[i..i + trailer.len()] == trailer {
                     found_index = true;
                     break;

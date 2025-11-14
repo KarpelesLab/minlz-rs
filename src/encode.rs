@@ -571,8 +571,6 @@ fn encode_block(dst: &mut [u8], src: &[u8]) -> usize {
     let mut next_emit = 0;
     let mut s = 1;
     let mut d = 0;
-    #[allow(unused_assignments)]
-    let mut repeat = 1;
 
     #[allow(unused_variables)]
     let cv = load64(src, s);
@@ -581,7 +579,8 @@ fn encode_block(dst: &mut [u8], src: &[u8]) -> usize {
         let mut candidate;
         let mut skip = 32;
 
-        loop {
+        // Search for next match (with skipping)
+        'search: loop {
             let next_s = s + (skip >> 5);
             skip += 1;
 
@@ -594,51 +593,74 @@ fn encode_block(dst: &mut [u8], src: &[u8]) -> usize {
             table[h] = s as u32;
 
             if load32(src, s) == load32(src, candidate) {
-                break;
+                break 'search;
             }
 
             s = next_s;
         }
 
-        // Extend backwards
-        while candidate > 0 && s > next_emit && src[candidate - 1] == src[s - 1] {
-            candidate -= 1;
-            s -= 1;
-        }
-
-        // Emit literal
-        if s > next_emit {
-            d += emit_literal(&mut dst[d..], &src[next_emit..s]);
-        }
-
-        // Extend the match forward
-        let base = s;
-        repeat = base - candidate;
-        s += 4;
-        candidate += 4;
-
-        while s <= src.len() - 8 {
-            if load64(src, s) != load64(src, candidate) {
-                let diff = (load64(src, s) ^ load64(src, candidate)).trailing_zeros() / 8;
-                s += diff as usize;
-                break;
+        // Inner loop: emit matches as long as there are immediate matches
+        'emit_copies: loop {
+            // Extend backwards
+            while candidate > 0 && s > next_emit && src[candidate - 1] == src[s - 1] {
+                candidate -= 1;
+                s -= 1;
             }
-            s += 8;
-            candidate += 8;
+
+            // Emit literal
+            if s > next_emit {
+                d += emit_literal(&mut dst[d..], &src[next_emit..s]);
+            }
+
+            // Extend the match forward
+            let base = s;
+            let offset = base - candidate;
+            s += 4;
+            candidate += 4;
+
+            while s <= src.len() - 8 {
+                if load64(src, s) != load64(src, candidate) {
+                    let diff = (load64(src, s) ^ load64(src, candidate)).trailing_zeros() / 8;
+                    s += diff as usize;
+                    break;
+                }
+                s += 8;
+                candidate += 8;
+            }
+
+            // Emit copy (emit_copy handles repeat optimization internally)
+            d += emit_copy(&mut dst[d..], offset, s - base);
+            next_emit = s;
+
+            // IMPORTANT: Check for immediate matches BEFORE checking s_limit
+            // This matches Go's behavior where immediate match check comes first
+
+            if s >= s_limit {
+                // At or past limit, emit remaining and exit
+                break 'outer;
+            }
+
+            // Check for immediate match at current position (like Go's encodeBlockGo)
+            // Update hash table for s-2 and s
+            if s >= 2 {
+                let h_back = hash(&src[s - 2..], shift);
+                table[h_back] = (s - 2) as u32;
+            }
+
+            let h_curr = hash(&src[s..], shift);
+            candidate = table[h_curr] as usize;
+            table[h_curr] = s as u32;
+
+            // Check if there's an immediate match (with safety check)
+            if candidate < s && s + 4 <= src.len() && load32(src, s) == load32(src, candidate) {
+                // Continue emitting copies
+                continue 'emit_copies;
+            }
+
+            // No immediate match, advance to next position and search again
+            s += 1;
+            break 'emit_copies;
         }
-
-        d += emit_copy_no_repeat(&mut dst[d..], repeat, s - base);
-        next_emit = s;
-
-        if s >= s_limit {
-            break;
-        }
-
-        // Update hash table
-        let h1 = hash(&src[s - 1..], shift);
-        table[h1] = (s - 1) as u32;
-
-        s += 1;
     }
 
     // Emit remaining
