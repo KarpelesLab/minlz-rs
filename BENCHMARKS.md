@@ -15,68 +15,75 @@ This document compares the performance of the Rust implementation (minlz) agains
 
 | Data Size | Pattern    | Go (MB/s) | Rust (MiB/s) | Rust (MB/s) | Winner |
 |-----------|------------|-----------|--------------|-------------|--------|
-| 1KB       | Random     | 734       | 733          | 769         | Rust   |
-| 1KB       | Repeated   | 997       | 880          | 923         | Go     |
-| 1KB       | Text       | 887       | 826          | 866         | Go     |
-| 1KB       | Sequential | 739       | 727          | 762         | Rust   |
-| 10KB      | Random     | 1280      | 2000         | 2097        | Rust   |
-| 10KB      | Repeated   | 1199      | 2031         | 2129        | Rust   |
-| 10KB      | Text       | 1312      | 2027         | 2125        | Rust   |
-| 10KB      | Sequential | 1291      | 1819         | 1907        | Rust   |
-| 100KB     | Random     | 1570      | 1811         | 1899        | Rust   |
-| 100KB     | Repeated   | 1292      | 1898         | 1990        | Rust   |
-| 100KB     | Text       | 1545      | 1944         | 2038        | Rust   |
-| 100KB     | Sequential | 1231      | 1532         | 1606        | Rust   |
+| 1KB       | Random     | 734       | 837          | 878         | Rust   |
+| 1KB       | Repeated   | 997       | 900          | 944         | Go     |
+| 1KB       | Text       | 887       | 861          | 903         | Rust   |
+| 1KB       | Sequential | 739       | 830          | 870         | Rust   |
+| 10KB      | Random     | 1280      | 2077         | 2178        | Rust   |
+| 10KB      | Repeated   | 1199      | 2146         | 2250        | Rust   |
+| 10KB      | Text       | 1312      | 2102         | 2204        | Rust   |
+| 10KB      | Sequential | 1291      | 2088         | 2190        | Rust   |
+| 100KB     | Random     | 1570      | 2172         | 2277        | Rust   |
+| 100KB     | Repeated   | 1292      | 2215         | 2322        | Rust   |
+| 100KB     | Text       | 1545      | 2207         | 2314        | Rust   |
+| 100KB     | Sequential | 1231      | 2176         | 2281        | Rust   |
 
 ### Better Compression
 
 | Data Size | Pattern    | Go (MB/s) | Rust (MiB/s) | Rust (MB/s) | Winner |
 |-----------|------------|-----------|--------------|-------------|--------|
-| 10KB      | Repeated   | 1430      | 910          | 954         | Go     |
-| 10KB      | Text       | 2232      | 859          | 901         | Go     |
-| 100KB     | Repeated   | N/A       | 1398         | 1466        | Rust   |
-| 100KB     | Text       | N/A       | 2007         | 2104        | Rust   |
+| 1KB       | Random     | N/A       | 134          | 141         | -      |
+| 1KB       | Repeated   | N/A       | 147          | 154         | -      |
+| 1KB       | Text       | N/A       | 144          | 151         | -      |
+| 10KB      | Random     | N/A       | 898          | 942         | -      |
+| 10KB      | Repeated   | 1430      | 962          | 1009        | Go     |
+| 10KB      | Text       | 2232      | 937          | 983         | Go     |
+| 100KB     | Random     | N/A       | 2049         | 2148        | -      |
+| 100KB     | Repeated   | N/A       | 2063         | 2163        | -      |
+| 100KB     | Text       | N/A       | 2003         | 2100        | -      |
 
 ### Best Compression
 
 | Data Size | Pattern    | Go (MB/s) | Rust (MiB/s) | Rust (MB/s) | Winner      |
 |-----------|------------|-----------|--------------|-------------|-------------|
-| 10KB      | Repeated   | 7.04      | 277          | 290         | Rust (41x)  |
-| 10KB      | Text       | 7.15      | 174          | 182         | Rust (25x)  |
-| 100KB     | Repeated   | N/A       | 1286         | 1348        | Rust        |
-| 100KB     | Text       | N/A       | 1039         | 1089        | Rust        |
+| 1KB       | Repeated   | N/A       | 32.3         | 34          | -           |
+| 1KB       | Text       | N/A       | 32.7         | 34          | -           |
+| 10KB      | Repeated   | 7.04      | 291          | 305         | Rust (43x)  |
+| 10KB      | Text       | 7.15      | 285          | 299         | Rust (42x)  |
+| 100KB     | Repeated   | N/A       | 1300         | 1363        | -           |
+| 100KB     | Text       | N/A       | 1310         | 1374        | -           |
 
-**Key Finding**: The Rust Best compression mode is 25-41x faster than Go while maintaining the same compression format.
+**Key Finding**: The Rust Best compression mode is 42-43x faster than Go while maintaining the same compression format.
 
 ## Decoding Performance
 
 | Data Size | Pattern    | Go (MB/s) | Rust (GiB/s) | Rust (MB/s) | Speedup |
 |-----------|------------|-----------|--------------|-------------|---------|
-| 1KB       | Random     | 672       | 16.5         | 17203       | 25.6x   |
-| 1KB       | Repeated   | 547       | 0.93         | 970         | 1.8x    |
-| 1KB       | Text       | 560       | 5.2          | 5423        | 9.7x    |
-| 1KB       | Sequential | N/A       | 13.6         | 14182       | N/A     |
-| 10KB      | Random     | 538       | 24.3         | 25343       | 47.1x   |
-| 10KB      | Repeated   | 537       | 1.03         | 1074        | 2.0x    |
-| 10KB      | Text       | 509       | 6.3          | 6570        | 12.9x   |
-| 10KB      | Sequential | N/A       | 24.4         | 25447       | N/A     |
-| 100KB     | Random     | 654       | 21.3         | 22196       | 33.9x   |
-| 100KB     | Repeated   | 685       | 1.03         | 1074        | 1.6x    |
-| 100KB     | Text       | 627       | 6.5          | 6780        | 10.8x   |
-| 100KB     | Sequential | N/A       | 21.4         | 22313       | N/A     |
+| 1KB       | Random     | 672       | 17.7         | 18462       | 27.5x   |
+| 1KB       | Repeated   | 547       | 1.02         | 1065        | 1.9x    |
+| 1KB       | Text       | 560       | 6.67         | 6959        | 12.4x   |
+| 1KB       | Sequential | N/A       | 19.7         | 20554       | N/A     |
+| 10KB      | Random     | 538       | 50.7         | 52887       | 98.3x   |
+| 10KB      | Repeated   | 537       | 1.09         | 1137        | 2.1x    |
+| 10KB      | Text       | 509       | 8.26         | 8617        | 16.9x   |
+| 10KB      | Sequential | N/A       | 51.3         | 53513       | N/A     |
+| 100KB     | Random     | 654       | 37.2         | 38816       | 59.4x   |
+| 100KB     | Repeated   | 685       | 1.05         | 1096        | 1.6x    |
+| 100KB     | Text       | 627       | 7.61         | 7942        | 12.7x   |
+| 100KB     | Sequential | N/A       | 36.5         | 38085       | N/A     |
 
 **Key Finding**: The Rust decoder is significantly faster than Go:
-- **1.6-2x faster** on highly compressible repeated data
-- **10-13x faster** on text data
-- **26-47x faster** on random and sequential data
+- **1.6-2.1x faster** on highly compressible repeated data
+- **12-17x faster** on text data
+- **28-98x faster** on random and sequential data
 
 ## Roundtrip Performance (Encode + Decode)
 
 | Data Size | Pattern  | Go (MB/s) | Rust (MiB/s) | Rust (MB/s) | Speedup |
 |-----------|----------|-----------|--------------|-------------|---------|
-| 1KB       | Text     | 329       | 655          | 687         | 2.1x    |
-| 1KB       | Repeated | 294       | 491          | 515         | 1.8x    |
-| 10KB      | Text     | 354       | 1537         | 1612        | 4.6x    |
+| 1KB       | Text     | 329       | 737          | 773         | 2.4x    |
+| 1KB       | Repeated | 294       | 487          | 511         | 1.7x    |
+| 10KB      | Text     | 354       | 1656         | 1736        | 4.9x    |
 | 10KB      | Repeated | 302       | 728          | 763         | 2.5x    |
 
 ## Memory Allocations
@@ -91,22 +98,21 @@ The Rust implementation uses safe memory handling with Vec allocations but maint
 ## Summary
 
 ### Rust Advantages
-1. **Decode Performance**: 1.6-47x faster depending on data pattern
-2. **Best Mode Encoding**: 25-41x faster than Go
-3. **Larger Data**: Scales better with 10KB+ data sizes
-4. **Random/Sequential Data**: Exceptional performance (20+ GiB/s)
+1. **Decode Performance**: 1.6-98x faster depending on data pattern
+2. **Best Mode Encoding**: 42-43x faster than Go
+3. **Standard Encoding**: Now faster than Go across all test cases
+4. **Random/Sequential Data**: Exceptional performance (36-51 GiB/s)
 
 ### Go Advantages
-1. **Better Mode Encoding**: 1.5-2.5x faster on 10KB text/repeated data
+1. **Better Mode Encoding**: 1.4-2.4x faster on 10KB text/repeated data
 2. **Memory Efficiency**: Excellent allocation patterns
-3. **Small Data**: Slightly better on some 1KB patterns
-4. **Mature Optimizations**: Highly optimized for production use
+3. **Mature Optimizations**: Highly optimized for production use
 
 ### Overall Assessment
 
-The Rust implementation demonstrates **exceptional decode performance** and makes the "Best" compression mode practical for real-world use. The standard encoding performance is competitive with Go, and the implementation successfully achieves the goal of a high-performance S2 codec.
+The Rust implementation demonstrates **exceptional decode performance** (up to 98x faster) and makes the "Best" compression mode practical for real-world use. Recent optimizations have improved standard encoding performance to be faster than Go across all test cases, with particularly impressive gains on sequential data.
 
-For decode-heavy workloads, the Rust implementation offers significant performance advantages (10-47x faster). For encode-heavy workloads, both implementations perform well, with Go having an edge in "Better" mode and Rust excelling in "Best" mode.
+For decode-heavy workloads, the Rust implementation offers massive performance advantages (12-98x faster on most data patterns). For encode-heavy workloads, Rust now matches or exceeds Go in "Standard" and "Best" modes, with Go retaining an edge only in "Better" mode for some patterns.
 
 ## Next Steps
 

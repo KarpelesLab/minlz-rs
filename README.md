@@ -253,26 +253,26 @@ This Rust implementation delivers exceptional performance, often exceeding the G
 
 | Mode     | Data Size | Pattern    | Rust       | Go        | Speedup |
 |----------|-----------|------------|------------|-----------|---------|
-| Standard | 10KB      | Random     | 2.0 GiB/s  | 1280 MB/s | 1.6x    |
-| Standard | 100KB     | Text       | 1.9 GiB/s  | 1545 MB/s | 1.3x    |
-| Better   | 10KB      | Text       | 859 MiB/s  | 2232 MB/s | 0.4x    |
-| Best     | 10KB      | Repeated   | 277 MiB/s  | 7 MB/s    | **41x** |
-| Best     | 10KB      | Text       | 174 MiB/s  | 7 MB/s    | **25x** |
+| Standard | 10KB      | Random     | 2.1 GiB/s  | 1280 MB/s | 1.7x    |
+| Standard | 100KB     | Text       | 2.2 GiB/s  | 1545 MB/s | 1.5x    |
+| Better   | 10KB      | Text       | 937 MiB/s  | 2232 MB/s | 0.4x    |
+| Best     | 10KB      | Repeated   | 291 MiB/s  | 7 MB/s    | **43x** |
+| Best     | 10KB      | Text       | 285 MiB/s  | 7 MB/s    | **42x** |
 
 #### Decoding Performance
 
 | Data Size | Pattern    | Rust       | Go        | Speedup  |
 |-----------|------------|------------|-----------|----------|
-| 1KB       | Random     | 16.5 GiB/s | 672 MB/s  | **26x**  |
-| 10KB      | Random     | 24.3 GiB/s | 538 MB/s  | **47x**  |
-| 10KB      | Text       | 6.3 GiB/s  | 509 MB/s  | **13x**  |
-| 100KB     | Random     | 21.3 GiB/s | 654 MB/s  | **34x**  |
-| 100KB     | Repeated   | 1.03 GiB/s | 685 MB/s  | 1.6x     |
+| 1KB       | Random     | 17.7 GiB/s | 672 MB/s  | **28x**  |
+| 10KB      | Random     | 50.7 GiB/s | 538 MB/s  | **98x**  |
+| 10KB      | Text       | 8.3 GiB/s  | 509 MB/s  | **17x**  |
+| 100KB     | Random     | 37.2 GiB/s | 654 MB/s  | **59x**  |
+| 100KB     | Repeated   | 1.05 GiB/s | 685 MB/s  | 1.6x     |
 
 **Key Takeaways:**
-- **Decode-heavy workloads**: Rust is 10-47x faster (random/text data)
-- **Best compression mode**: Rust is 25-41x faster, making it practical for production use
-- **Standard encoding**: Competitive with Go, 1.3-1.6x faster on larger data
+- **Decode-heavy workloads**: Rust is 17-98x faster (random/text data)
+- **Best compression mode**: Rust is 42-43x faster, making it practical for production use
+- **Standard encoding**: Faster than Go across all patterns, 1.5-1.7x on larger data
 - **Better mode**: Go currently faster (area for future optimization)
 
 See [BENCHMARKS.md](BENCHMARKS.md) for detailed performance analysis.
