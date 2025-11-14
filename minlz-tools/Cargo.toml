@@ -1,6 +1,6 @@
 [package]
 name = "minlz-tools"
-version = "0.1.2"
+version = "0.1.3"
 edition = "2021"
 authors = ["Karpeles Lab Inc."]
 description = "Command-line tools for S2 compression"
@@ -16,7 +16,7 @@ name = "s2d"
 path = "src/bin/s2d.rs"
 
 [dependencies]
-minlz = { version = "0.1.2", path = "..", features = ["concurrent"] }
+minlz = { version = "0.1.3", path = "..", features = ["concurrent"] }
 clap = { version = "4", features = ["derive", "wrap_help"] }
 anyhow = "1"
 indicatif = "0.17"
