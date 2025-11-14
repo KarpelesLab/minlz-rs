@@ -156,92 +156,25 @@ let dict_bytes = dict.to_bytes();
 
 ## Command-Line Tools
 
-The `minlz-tools` package provides command-line utilities compatible with the Go s2 tools:
-
-### Installation
+The `minlz-tools` package provides `s2c` (compression) and `s2d` (decompression) command-line tools that are fully compatible with the Go s2 tools.
 
 ```bash
-cd minlz-tools
-cargo build --release
+# Install from source
+cargo install --path minlz-tools
 
-# Binaries will be in minlz-tools/target/release/
-# - s2c: compression tool
-# - s2d: decompression tool
-```
-
-### s2c - Compression Tool
-
-```bash
 # Compress a file
-s2c input.txt
-# Creates input.txt.s2
-
-# Compress with different levels
-s2c --faster input.txt     # Fast compression
-s2c input.txt              # Standard (default)
+s2c input.txt              # Creates input.txt.s2
 s2c --slower input.txt     # Best compression
+s2c --faster input.txt     # Fast compression
 
-# Custom output file
-s2c input.txt -o output.s2
-
-# Compress to stdout
-s2c -c input.txt > output.s2
-
-# Stdin to stdout
-cat input.txt | s2c - -c > output.s2
-
-# Custom block size
-s2c --blocksize 4M input.txt
-
-# Remove source after compression
-s2c --rm input.txt
-
-# Safe mode (don't overwrite)
-s2c --safe input.txt
-
-# Quiet mode
-s2c -q input.txt
-```
-
-### s2d - Decompression Tool
-
-```bash
 # Decompress a file
-s2d input.txt.s2
-# Creates input.txt
-
-# Custom output file
-s2d input.txt.s2 -o output.txt
-
-# Decompress to stdout
-s2d -c input.txt.s2 > output.txt
-
-# Stdin to stdout
-cat input.txt.s2 | s2d - -c > output.txt
-
-# Verify file integrity (no output)
-s2d --verify input.txt.s2
-
-# Remove source after decompression
-s2d --rm input.txt.s2
-
-# Quiet mode
-s2d -q input.txt.s2
+s2d input.txt.s2           # Creates input.txt
+s2d --verify input.txt.s2  # Verify integrity
 ```
 
-### Cross-Compatibility
+The tools are cross-compatible with Go's s2c/s2d and offer 12-98x faster performance depending on the operation.
 
-The CLI tools are fully compatible with the Go s2 tools:
-
-```bash
-# Compress with Rust, decompress with Go
-./s2c file.txt
-go run github.com/klauspost/compress/s2/cmd/s2d@latest file.txt.s2
-
-# Compress with Go, decompress with Rust
-go run github.com/klauspost/compress/s2/cmd/s2c@latest file.txt
-./s2d file.txt.s2
-```
+See [minlz-tools/README.md](minlz-tools/README.md) for complete documentation.
 
 ## Performance
 
