@@ -628,6 +628,12 @@ fn encode_block(dst: &mut [u8], src: &[u8]) -> usize {
                 candidate += 8;
             }
 
+            // Check remaining bytes (0-7 bytes) after the 8-byte aligned loop
+            while s < src.len() && candidate < s && src[s] == src[candidate] {
+                s += 1;
+                candidate += 1;
+            }
+
             // Emit copy (emit_copy handles repeat optimization internally)
             d += emit_copy(&mut dst[d..], offset, s - base);
             next_emit = s;
