@@ -314,7 +314,10 @@ fn compress_file(input_path: &str, args: &Args, block_size: usize, pad_size: usi
                 match minlz::decode_snappy(&compressed_data) {
                     Ok(decompressed) => {
                         if !args.quiet {
-                            eprintln!("Recompressing Snappy block (decompressed {} bytes)", decompressed.len());
+                            eprintln!(
+                                "Recompressing Snappy block (decompressed {} bytes)",
+                                decompressed.len()
+                            );
                         }
                         decompressed
                     }
@@ -323,12 +326,18 @@ fn compress_file(input_path: &str, args: &Args, block_size: usize, pad_size: usi
                         match decode(&compressed_data) {
                             Ok(decompressed) => {
                                 if !args.quiet {
-                                    eprintln!("Recompressing S2 block (decompressed {} bytes)", decompressed.len());
+                                    eprintln!(
+                                        "Recompressing S2 block (decompressed {} bytes)",
+                                        decompressed.len()
+                                    );
                                 }
                                 decompressed
                             }
                             Err(e) => {
-                                anyhow::bail!("Failed to decompress input for recompression: {}", e);
+                                anyhow::bail!(
+                                    "Failed to decompress input for recompression: {}",
+                                    e
+                                );
                             }
                         }
                     }

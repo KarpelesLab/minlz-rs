@@ -198,34 +198,76 @@ impl<W: Write> Writer<W> {
         // Calculate CRC of uncompressed data
         let checksum = crc(&self.buf);
 
-        // Write chunk: type (1 byte) + length (3 bytes little-endian) + checksum (4 bytes) + data
-        let chunk_len = compressed.len() + CHECKSUM_SIZE;
-        if chunk_len > MAX_CHUNK_SIZE {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "compressed block too large",
-            ));
+        // Decide whether to use compressed or uncompressed format
+        // Following Go's logic: dstLimit = len(src) - len(src)/32 - 5
+        let dst_limit = self
+            .buf
+            .len()
+            .saturating_sub(self.buf.len() / 32)
+            .saturating_sub(5);
+        let use_compressed = compressed.len() <= dst_limit;
+
+        if use_compressed {
+            // Write compressed chunk
+            // Chunk length includes: checksum (4 bytes) + compressed data
+            let chunk_len = compressed.len() + CHECKSUM_SIZE;
+            if chunk_len > MAX_CHUNK_SIZE {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "compressed block too large",
+                ));
+            }
+
+            // Chunk type: compressed data
+            self.writer.write_all(&[CHUNK_TYPE_COMPRESSED_DATA])?;
+
+            // Chunk length (24-bit little-endian)
+            let len_bytes = [
+                (chunk_len & 0xff) as u8,
+                ((chunk_len >> 8) & 0xff) as u8,
+                ((chunk_len >> 16) & 0xff) as u8,
+            ];
+            self.writer.write_all(&len_bytes)?;
+
+            // CRC32 checksum (little-endian)
+            self.writer.write_all(&checksum.to_le_bytes())?;
+
+            // Compressed data
+            self.writer.write_all(&compressed)?;
+
+            // Track total written bytes (for padding calculation)
+            self.total_written += 1 + 3 + (chunk_len as u64); // type + length + data
+        } else {
+            // Write uncompressed chunk
+            // Chunk length includes: checksum (4 bytes) + uncompressed data
+            let chunk_len = self.buf.len() + CHECKSUM_SIZE;
+            if chunk_len > MAX_CHUNK_SIZE {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "uncompressed block too large",
+                ));
+            }
+
+            // Chunk type: uncompressed data
+            self.writer.write_all(&[CHUNK_TYPE_UNCOMPRESSED_DATA])?;
+
+            // Chunk length (24-bit little-endian)
+            let len_bytes = [
+                (chunk_len & 0xff) as u8,
+                ((chunk_len >> 8) & 0xff) as u8,
+                ((chunk_len >> 16) & 0xff) as u8,
+            ];
+            self.writer.write_all(&len_bytes)?;
+
+            // CRC32 checksum (little-endian)
+            self.writer.write_all(&checksum.to_le_bytes())?;
+
+            // Uncompressed data
+            self.writer.write_all(&self.buf)?;
+
+            // Track total written bytes (for padding calculation)
+            self.total_written += 1 + 3 + (chunk_len as u64); // type + length + data
         }
-
-        // Chunk type: compressed data
-        self.writer.write_all(&[CHUNK_TYPE_COMPRESSED_DATA])?;
-
-        // Chunk length (24-bit little-endian)
-        let len_bytes = [
-            (chunk_len & 0xff) as u8,
-            ((chunk_len >> 8) & 0xff) as u8,
-            ((chunk_len >> 16) & 0xff) as u8,
-        ];
-        self.writer.write_all(&len_bytes)?;
-
-        // CRC32 checksum (little-endian)
-        self.writer.write_all(&checksum.to_le_bytes())?;
-
-        // Compressed data
-        self.writer.write_all(&compressed)?;
-
-        // Track total written bytes (for padding calculation)
-        self.total_written += 1 + 3 + (chunk_len as u64); // type + length + data
 
         // Clear the buffer
         self.buf.clear();
