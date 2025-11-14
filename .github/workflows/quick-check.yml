@@ -40,22 +40,22 @@ jobs:
       - name: Run clippy
         run: cargo clippy --all-targets -- -D warnings
 
-      - name: Build s2-tools
+      - name: Build minlz-tools
         run: |
-          cd s2-tools
+          cd minlz-tools
           cargo build --verbose
 
-      - name: Test s2-tools
+      - name: Test minlz-tools
         run: |
-          cd s2-tools
+          cd minlz-tools
           cargo test --verbose
 
-      - name: Check s2-tools formatting
+      - name: Check minlz-tools formatting
         run: |
-          cd s2-tools
+          cd minlz-tools
           cargo fmt --all -- --check
 
-      - name: Run clippy on s2-tools
+      - name: Run clippy on minlz-tools
         run: |
-          cd s2-tools
+          cd minlz-tools
           cargo clippy --all-targets -- -D warnings

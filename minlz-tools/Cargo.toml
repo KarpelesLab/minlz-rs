@@ -1,5 +1,5 @@
 [package]
-name = "s2-tools"
+name = "minlz-tools"
 version = "0.1.0"
 edition = "2021"
 authors = ["Karpeles Lab Inc."]

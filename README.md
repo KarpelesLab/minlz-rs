@@ -156,15 +156,15 @@ let dict_bytes = dict.to_bytes();
 
 ## Command-Line Tools
 
-The `s2-tools` package provides command-line utilities compatible with the Go s2 tools:
+The `minlz-tools` package provides command-line utilities compatible with the Go s2 tools:
 
 ### Installation
 
 ```bash
-cd s2-tools
+cd minlz-tools
 cargo build --release
 
-# Binaries will be in s2-tools/target/release/
+# Binaries will be in minlz-tools/target/release/
 # - s2c: compression tool
 # - s2d: decompression tool
 ```

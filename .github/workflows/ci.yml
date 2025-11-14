@@ -61,9 +61,9 @@ jobs:
       - name: Run doc tests
         run: cargo test --doc --verbose
 
-      - name: Test s2-tools
+      - name: Test minlz-tools
         run: |
-          cd s2-tools
+          cd minlz-tools
           cargo test --verbose
 
   fmt:
@@ -81,9 +81,9 @@ jobs:
       - name: Check formatting
         run: cargo fmt --all -- --check
 
-      - name: Check s2-tools formatting
+      - name: Check minlz-tools formatting
         run: |
-          cd s2-tools
+          cd minlz-tools
           cargo fmt --all -- --check
 
   clippy:
@@ -101,9 +101,9 @@ jobs:
       - name: Run clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
 
-      - name: Run clippy on s2-tools
+      - name: Run clippy on minlz-tools
         run: |
-          cd s2-tools
+          cd minlz-tools
           cargo clippy --all-targets -- -D warnings
 
   coverage:
