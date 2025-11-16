@@ -689,6 +689,25 @@ fn encode_block_better(dst: &mut [u8], src: &[u8]) -> usize {
         return 0;
     }
 
+    // Match Go's AMD64 assembly thresholds for table sizes
+    const LIMIT_12B: usize = 16 << 10; // 16KB
+    const LIMIT_10B: usize = 4 << 10; // 4KB
+    const LIMIT_8B: usize = 512;
+
+    // Use appropriate table size based on input size
+    if src.len() < LIMIT_8B {
+        return encode_block_better_8b(dst, src);
+    }
+    if src.len() < LIMIT_10B {
+        return encode_block_better_10b(dst, src);
+    }
+    if src.len() < LIMIT_12B {
+        return encode_block_better_12b(dst, src);
+    }
+    if src.len() <= 64 * 1024 {
+        return encode_block_better_64k(dst, src);
+    }
+
     // Initialize the hash tables.
     const L_TABLE_BITS: u8 = 17; // Long hash matches
     const S_TABLE_BITS: u8 = 14; // Short hash matches
@@ -733,16 +752,8 @@ fn encode_block_better(dst: &mut [u8], src: &[u8]) -> usize {
             l_table[hash_l] = s as u32;
             s_table[hash_s] = s as u32;
 
-            let val_long = if candidate_l > 0 && candidate_l < src.len() - 8 {
-                load64(src, candidate_l)
-            } else {
-                0
-            };
-            let val_short = if candidate_s > 0 && candidate_s < src.len() - 8 {
-                load64(src, candidate_s)
-            } else {
-                0
-            };
+            let val_long = load64(src, candidate_l);
+            let val_short = load64(src, candidate_s);
 
             // If long matches at least 8 bytes, use that.
             if cv == val_long {
@@ -764,10 +775,7 @@ fn encode_block_better(dst: &mut [u8], src: &[u8]) -> usize {
                 let hash_l = hash7(cv >> 8, L_TABLE_BITS) as usize;
                 let candidate_l_next = l_table[hash_l] as usize;
                 l_table[hash_l] = (s + 1) as u32;
-                if candidate_l_next > 0
-                    && candidate_l_next < src.len() - 4
-                    && (cv >> 8) as u32 == load32(src, candidate_l_next)
-                {
+                if (cv >> 8) as u32 == load32(src, candidate_l_next) {
                     s += 1;
                     candidate_l = candidate_l_next;
                     break;
@@ -777,9 +785,7 @@ fn encode_block_better(dst: &mut [u8], src: &[u8]) -> usize {
                 break;
             }
 
-            if next_s + 8 <= src.len() {
-                cv = load64(src, next_s);
-            }
+            cv = load64(src, next_s);
             s = next_s;
         }
 
@@ -799,26 +805,23 @@ fn encode_block_better(dst: &mut [u8], src: &[u8]) -> usize {
 
         // Extend the 4-byte match as long as possible.
         s += 4;
-        let mut candidate = candidate_l + 4;
+        candidate_l += 4;
         while s < src.len() {
             if src.len() - s < 8 {
-                if s < src.len() && candidate < src.len() && src[s] == src[candidate] {
+                if src[s] == src[candidate_l] {
                     s += 1;
-                    candidate += 1;
+                    candidate_l += 1;
                     continue;
                 }
                 break;
             }
-            if candidate + 8 > src.len() {
-                break;
-            }
-            let diff = load64(src, s) ^ load64(src, candidate);
+            let diff = load64(src, s) ^ load64(src, candidate_l);
             if diff != 0 {
                 s += (diff.trailing_zeros() / 8) as usize;
                 break;
             }
             s += 8;
-            candidate += 8;
+            candidate_l += 8;
         }
 
         // Bail if the match is equal or worse to the encoding for large offsets.
@@ -827,9 +830,7 @@ fn encode_block_better(dst: &mut [u8], src: &[u8]) -> usize {
             if s >= s_limit {
                 break;
             }
-            if s + 8 <= src.len() {
-                cv = load64(src, s);
-            }
+            cv = load64(src, s);
             continue;
         }
 
@@ -858,38 +859,366 @@ fn encode_block_better(dst: &mut [u8], src: &[u8]) -> usize {
         let index0 = base + 1;
         let index1 = s - 2;
 
-        if index0 < src.len() - 8 {
-            let cv0 = load64(src, index0);
-            l_table[hash7(cv0, L_TABLE_BITS) as usize] = index0 as u32;
-            if index0 + 1 < src.len() - 8 {
-                s_table[hash4(cv0 >> 8, S_TABLE_BITS) as usize] = (index0 + 1) as u32;
-            }
-        }
+        let cv0 = load64(src, index0);
+        let cv1 = load64(src, index1);
+        l_table[hash7(cv0, L_TABLE_BITS) as usize] = index0 as u32;
+        s_table[hash4(cv0 >> 8, S_TABLE_BITS) as usize] = (index0 + 1) as u32;
 
-        if index1 > 0 && index1 < src.len() - 8 {
-            let cv1 = load64(src, index1);
-            l_table[hash7(cv1, L_TABLE_BITS) as usize] = index1 as u32;
-            if index1 + 1 < src.len() - 8 {
-                s_table[hash4(cv1 >> 8, S_TABLE_BITS) as usize] = (index1 + 1) as u32;
-            }
-        }
+        l_table[hash7(cv1, L_TABLE_BITS) as usize] = index1 as u32;
+        s_table[hash4(cv1 >> 8, S_TABLE_BITS) as usize] = (index1 + 1) as u32;
+        let mut index0 = index0 + 1;
+        let index1 = index1 - 1;
+        cv = load64(src, s);
 
         // Index large values sparsely in between.
-        let mut index0 = index0 + 1;
-        let mut index2 = (index0 + index1).div_ceil(2);
+        // We do two starting from different offsets for speed.
+        let mut index2 = (index0 + index1 + 1) >> 1;
         while index2 < index1 {
-            if index0 < src.len() - 8 {
-                l_table[hash7(load64(src, index0), L_TABLE_BITS) as usize] = index0 as u32;
-            }
-            if index2 < src.len() - 8 {
-                l_table[hash7(load64(src, index2), L_TABLE_BITS) as usize] = index2 as u32;
-            }
+            l_table[hash7(load64(src, index0), L_TABLE_BITS) as usize] = index0 as u32;
+            l_table[hash7(load64(src, index2), L_TABLE_BITS) as usize] = index2 as u32;
             index0 += 2;
             index2 += 2;
         }
+    }
 
-        if s + 8 <= src.len() {
-            cv = load64(src, s);
+    // Emit remaining
+    if next_emit < src.len() {
+        // Bail if we exceed the maximum size.
+        if d + src.len() - next_emit > dst_limit {
+            return 0;
+        }
+        d += emit_literal(&mut dst[d..], &src[next_emit..]);
+    }
+
+    d
+}
+
+/// Encode a block using the Better S2 algorithm with 10-bit tables (< 512 bytes)
+/// Matches Go's encodeBetterBlockAsm8B which uses lTableBits=10, sTableBits=8, skipLog=4
+fn encode_block_better_8b(dst: &mut [u8], src: &[u8]) -> usize {
+    encode_block_better_small::<10, 8, 4>(dst, src)
+}
+
+/// Encode a block using the Better S2 algorithm with 12-bit tables (512-4KB)
+/// Matches Go's encodeBetterBlockAsm10B which uses lTableBits=12, sTableBits=10, skipLog=5
+fn encode_block_better_10b(dst: &mut [u8], src: &[u8]) -> usize {
+    encode_block_better_small::<12, 10, 5>(dst, src)
+}
+
+/// Encode a block using the Better S2 algorithm with 14-bit tables (4KB-16KB)
+/// Matches Go's encodeBetterBlockAsm12B which uses lTableBits=14, sTableBits=12, skipLog=5
+fn encode_block_better_12b(dst: &mut [u8], src: &[u8]) -> usize {
+    encode_block_better_small::<14, 12, 5>(dst, src)
+}
+
+/// Generic implementation for small input better compression
+fn encode_block_better_small<const L_BITS: u8, const S_BITS: u8, const SKIP_LOG: u8>(
+    dst: &mut [u8],
+    src: &[u8],
+) -> usize {
+    let s_limit = src.len() - INPUT_MARGIN;
+    if src.len() < MIN_NON_LITERAL_BLOCK_SIZE {
+        return 0;
+    }
+
+    const fn table_size(bits: u8) -> usize {
+        1 << bits
+    }
+
+    let mut l_table = vec![0u16; table_size(L_BITS)];
+    let mut s_table = vec![0u16; table_size(S_BITS)];
+
+    let dst_limit = src.len() - src.len() / 32 - 6;
+    let mut next_emit = 0;
+    let mut s = 1;
+    let mut cv = load64(src, s);
+    let mut repeat = 0;
+    let mut d = 0;
+
+    'outer: loop {
+        let mut candidate_l;
+        let mut next_s;
+
+        loop {
+            next_s = s + (s - next_emit) / (1 << SKIP_LOG) + 1;
+            if next_s > s_limit {
+                break 'outer;
+            }
+
+            let hash_l = hash7(cv, L_BITS) as usize;
+            let hash_s = hash4(cv, S_BITS) as usize;
+            candidate_l = l_table[hash_l] as usize;
+            let candidate_s = s_table[hash_s] as usize;
+            l_table[hash_l] = s as u16;
+            s_table[hash_s] = s as u16;
+
+            let val_long = load64(src, candidate_l);
+            let val_short = load64(src, candidate_s);
+
+            if cv == val_long {
+                break;
+            }
+            if cv == val_short {
+                candidate_l = candidate_s;
+                break;
+            }
+            if (cv as u32) == (val_long as u32) {
+                break;
+            }
+            if (cv as u32) == (val_short as u32) {
+                let hash_l = hash7(cv >> 8, L_BITS) as usize;
+                let candidate_l_next = l_table[hash_l] as usize;
+                l_table[hash_l] = (s + 1) as u16;
+                if (cv >> 8) as u32 == load32(src, candidate_l_next) {
+                    s += 1;
+                    candidate_l = candidate_l_next;
+                    break;
+                }
+                candidate_l = candidate_s;
+                break;
+            }
+
+            cv = load64(src, next_s);
+            s = next_s;
+        }
+
+        while candidate_l > 0 && s > next_emit && src[candidate_l - 1] == src[s - 1] {
+            candidate_l -= 1;
+            s -= 1;
+        }
+
+        if d + (s - next_emit) > dst_limit {
+            return 0;
+        }
+
+        let base = s;
+        let offset = base - candidate_l;
+
+        s += 4;
+        candidate_l += 4;
+        while s < src.len() {
+            if src.len() - s < 8 {
+                if src[s] == src[candidate_l] {
+                    s += 1;
+                    candidate_l += 1;
+                    continue;
+                }
+                break;
+            }
+            let diff = load64(src, s) ^ load64(src, candidate_l);
+            if diff != 0 {
+                s += (diff.trailing_zeros() / 8) as usize;
+                break;
+            }
+            s += 8;
+            candidate_l += 8;
+        }
+
+        d += emit_literal(&mut dst[d..], &src[next_emit..base]);
+        if repeat == offset {
+            d += emit_repeat(&mut dst[d..], offset, s - base);
+        } else {
+            d += emit_copy(&mut dst[d..], offset, s - base);
+            repeat = offset;
+        }
+
+        next_emit = s;
+        if s >= s_limit {
+            break;
+        }
+
+        if d > dst_limit {
+            return 0;
+        }
+
+        let index0 = base + 1;
+        let index1 = s - 2;
+
+        let cv0 = load64(src, index0);
+        let cv1 = load64(src, index1);
+        l_table[hash7(cv0, L_BITS) as usize] = index0 as u16;
+        s_table[hash4(cv0 >> 8, S_BITS) as usize] = (index0 + 1) as u16;
+
+        l_table[hash7(cv1, L_BITS) as usize] = index1 as u16;
+        s_table[hash4(cv1 >> 8, S_BITS) as usize] = (index1 + 1) as u16;
+        let mut index0 = index0 + 1;
+        let index1 = index1 - 1;
+        cv = load64(src, s);
+
+        let mut index2 = (index0 + index1 + 1) >> 1;
+        while index2 < index1 {
+            l_table[hash7(load64(src, index0), L_BITS) as usize] = index0 as u16;
+            l_table[hash7(load64(src, index2), L_BITS) as usize] = index2 as u16;
+            index0 += 2;
+            index2 += 2;
+        }
+    }
+
+    if next_emit < src.len() {
+        if d + src.len() - next_emit > dst_limit {
+            return 0;
+        }
+        d += emit_literal(&mut dst[d..], &src[next_emit..]);
+    }
+
+    d
+}
+
+/// Encode a block using the Better S2 algorithm optimized for ≤64KB inputs
+/// Uses smaller hash tables and different skip logic than the full version
+fn encode_block_better_64k(dst: &mut [u8], src: &[u8]) -> usize {
+    let s_limit = src.len() - INPUT_MARGIN;
+    if src.len() < MIN_NON_LITERAL_BLOCK_SIZE {
+        return 0;
+    }
+
+    // Initialize the hash tables with smaller sizes for 64K inputs
+    const L_TABLE_BITS: u8 = 16;
+    const S_TABLE_BITS: u8 = 13;
+    const L_TABLE_SIZE: usize = 1 << L_TABLE_BITS;
+    const S_TABLE_SIZE: usize = 1 << S_TABLE_BITS;
+
+    let mut l_table = vec![0u16; L_TABLE_SIZE];
+    let mut s_table = vec![0u16; S_TABLE_SIZE];
+
+    // Bail if we can't compress to at least this.
+    let dst_limit = src.len() - src.len() / 32 - 6;
+
+    let mut next_emit = 0;
+    let mut s = 1;
+    let mut cv = load64(src, s);
+    let mut repeat = 0;
+    let mut d = 0;
+
+    'outer: loop {
+        let mut candidate_l;
+        let mut next_s;
+
+        loop {
+            // Next src position to check - uses >>6 for 64K version
+            next_s = s + (s - next_emit) / 64 + 1;
+            if next_s > s_limit {
+                break 'outer;
+            }
+
+            let hash_l = hash7(cv, L_TABLE_BITS) as usize;
+            let hash_s = hash4(cv, S_TABLE_BITS) as usize;
+            candidate_l = l_table[hash_l] as usize;
+            let candidate_s = s_table[hash_s] as usize;
+            l_table[hash_l] = s as u16;
+            s_table[hash_s] = s as u16;
+
+            let val_long = load64(src, candidate_l);
+            let val_short = load64(src, candidate_s);
+
+            // If long matches at least 8 bytes, use that.
+            if cv == val_long {
+                break;
+            }
+            if cv == val_short {
+                candidate_l = candidate_s;
+                break;
+            }
+
+            // Long likely matches 7, so take that.
+            if (cv as u32) == (val_long as u32) {
+                break;
+            }
+
+            // Check our short candidate
+            if (cv as u32) == (val_short as u32) {
+                // Try a long candidate at s+1
+                let hash_l = hash7(cv >> 8, L_TABLE_BITS) as usize;
+                let candidate_l_next = l_table[hash_l] as usize;
+                l_table[hash_l] = (s + 1) as u16;
+                if (cv >> 8) as u32 == load32(src, candidate_l_next) {
+                    s += 1;
+                    candidate_l = candidate_l_next;
+                    break;
+                }
+                // Use our short candidate.
+                candidate_l = candidate_s;
+                break;
+            }
+
+            cv = load64(src, next_s);
+            s = next_s;
+        }
+
+        // Extend backwards
+        while candidate_l > 0 && s > next_emit && src[candidate_l - 1] == src[s - 1] {
+            candidate_l -= 1;
+            s -= 1;
+        }
+
+        // Bail if we exceed the maximum size.
+        if d + (s - next_emit) > dst_limit {
+            return 0;
+        }
+
+        let base = s;
+        let offset = base - candidate_l;
+
+        // Extend the 4-byte match as long as possible.
+        s += 4;
+        candidate_l += 4;
+        while s < src.len() {
+            if src.len() - s < 8 {
+                if src[s] == src[candidate_l] {
+                    s += 1;
+                    candidate_l += 1;
+                    continue;
+                }
+                break;
+            }
+            let diff = load64(src, s) ^ load64(src, candidate_l);
+            if diff != 0 {
+                s += (diff.trailing_zeros() / 8) as usize;
+                break;
+            }
+            s += 8;
+            candidate_l += 8;
+        }
+
+        d += emit_literal(&mut dst[d..], &src[next_emit..base]);
+        if repeat == offset {
+            d += emit_repeat(&mut dst[d..], offset, s - base);
+        } else {
+            d += emit_copy(&mut dst[d..], offset, s - base);
+            repeat = offset;
+        }
+
+        next_emit = s;
+        if s >= s_limit {
+            break;
+        }
+
+        if d > dst_limit {
+            return 0;
+        }
+
+        // Index short & long
+        let index0 = base + 1;
+        let index1 = s - 2;
+
+        let cv0 = load64(src, index0);
+        let cv1 = load64(src, index1);
+        l_table[hash7(cv0, L_TABLE_BITS) as usize] = index0 as u16;
+        s_table[hash4(cv0 >> 8, S_TABLE_BITS) as usize] = (index0 + 1) as u16;
+
+        l_table[hash7(cv1, L_TABLE_BITS) as usize] = index1 as u16;
+        s_table[hash4(cv1 >> 8, S_TABLE_BITS) as usize] = (index1 + 1) as u16;
+        let mut index0 = index0 + 1;
+        let index1 = index1 - 1;
+        cv = load64(src, s);
+
+        // Index large values sparsely in between.
+        let mut index2 = (index0 + index1 + 1) >> 1;
+        while index2 < index1 {
+            l_table[hash7(load64(src, index0), L_TABLE_BITS) as usize] = index0 as u16;
+            l_table[hash7(load64(src, index2), L_TABLE_BITS) as usize] = index2 as u16;
+            index0 += 2;
+            index2 += 2;
         }
     }
 
