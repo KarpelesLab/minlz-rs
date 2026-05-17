@@ -633,13 +633,21 @@ fn encode_block(dst: &mut [u8], src: &[u8]) -> usize {
                 if load64(src, s) != load64(src, candidate) {
                     let diff = (load64(src, s) ^ load64(src, candidate)).trailing_zeros() / 8;
                     s += diff as usize;
+                    // Keep candidate aligned with s so the remaining-bytes
+                    // loop below doesn't re-process bytes we already
+                    // verified inside the 8-byte block.
+                    candidate += diff as usize;
                     break;
                 }
                 s += 8;
                 candidate += 8;
             }
 
-            // Check remaining bytes (0-7 bytes) after the 8-byte aligned loop
+            // Check remaining bytes (0-7 bytes) after the 8-byte aligned loop.
+            // After a diff-break above, src[s] is the first byte we know
+            // differs, so this loop will exit immediately. When the 8-byte
+            // loop ran out of room (s > src.len() - 8), s and candidate are
+            // still in sync from the lock-step s += 8 / candidate += 8.
             while s < src.len() && candidate < s && src[s] == src[candidate] {
                 s += 1;
                 candidate += 1;

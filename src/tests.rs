@@ -1606,3 +1606,60 @@ fn test_decode_edge_cases() {
         }
     }
 }
+
+/// Regression test for the encode_block match-extension off-by-N bug.
+///
+/// The 8-byte SIMD-style extension loop in `encode_block` would break with
+/// `s += diff` when finding a mismatched byte in the loaded u64 — but it did
+/// not also advance `candidate` by `diff`. The subsequent byte-by-byte
+/// "remaining bytes" loop then compared against a stale `candidate`,
+/// matched bytes it shouldn't have, and reported a match length too long
+/// by up to 7. The decoder then faithfully copied the over-long source
+/// range, producing wrong output bytes.
+///
+/// Inputs with adjacent zero runs and short literal sections were the
+/// easiest trigger because the encoder would match the trailing zero run
+/// against a candidate earlier in the input whose tail crossed a literal
+/// boundary, and the trailing_zeros of the XOR fell exactly on that
+/// boundary. Roughly 95% of randomly-generated inputs with mixed zero
+/// runs and short bursts failed.
+#[test]
+fn test_encode_zero_runs_roundtrip() {
+    use crate::{decode, encode};
+
+    // Minimal hand-shrunk reproducer: 6 zeros, 14 repeated bytes, 12 zeros.
+    let cases: &[&[u8]] = &[
+        &[
+            0, 0, 0, 0, 0, 0, 203, 203, 203, 203, 203, 203, 203, 203, 203, 203, 203, 203, 203,
+            203, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        ],
+        // A second pattern with the literal in the middle and zero runs around it.
+        &[
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 203, 203, 203, 203, 203, 203, 203, 203, 203,
+            203, 203, 203, 203, 203, 203, 203, 203, 203, 203, 203, 203, 203, 203, 203, 203, 203,
+            203, 203, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        ],
+    ];
+
+    for (i, src) in cases.iter().enumerate() {
+        let compressed = encode(src);
+        let round = decode(&compressed).expect("decode failed");
+        assert_eq!(
+            *src,
+            round.as_slice(),
+            "case {} of {} bytes did not round-trip",
+            i,
+            src.len()
+        );
+    }
+
+    // Also exercise the better/best encoders on the same patterns to make
+    // sure none of them have an equivalent off-by-N regression.
+    use crate::{encode_best, encode_better};
+    for (i, src) in cases.iter().enumerate() {
+        let b = encode_better(src);
+        assert_eq!(*src, decode(&b).unwrap().as_slice(), "encode_better case {i}");
+        let b = encode_best(src);
+        assert_eq!(*src, decode(&b).unwrap().as_slice(), "encode_best case {i}");
+    }
+}
