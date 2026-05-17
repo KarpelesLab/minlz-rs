@@ -1,6 +1,6 @@
 [package]
 name = "minlz"
-version = "0.1.3"
+version = "0.1.4"
 edition = "2021"
 authors = ["Karpeles Lab Inc."]
 description = "S2 compression format - compatible with klauspost/compress/s2"
