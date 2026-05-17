@@ -169,7 +169,7 @@ fn s2_decode(dst: &mut [u8], src: &[u8]) -> Result<()> {
                     return Err(Error::Corrupt);
                 }
 
-                offset = u16::from_le_bytes([src[s + 1], src[s + 2]]) as usize;
+                offset = u16::from_le_bytes(src[s + 1..s + 3].try_into().unwrap()) as usize;
                 let length = 1 + ((src[s] >> 2) as usize);
                 s += 3;
 
@@ -188,7 +188,7 @@ fn s2_decode(dst: &mut [u8], src: &[u8]) -> Result<()> {
                 }
 
                 offset =
-                    u32::from_le_bytes([src[s + 1], src[s + 2], src[s + 3], src[s + 4]]) as usize;
+                    u32::from_le_bytes(src[s + 1..s + 5].try_into().unwrap()) as usize;
                 let length = 1 + ((src[s] >> 2) as usize);
                 s += 5;
 
@@ -249,7 +249,7 @@ fn s2_decode(dst: &mut [u8], src: &[u8]) -> Result<()> {
                     return Err(Error::Corrupt);
                 }
 
-                offset = u16::from_le_bytes([src[s - 2], src[s - 1]]) as usize;
+                offset = u16::from_le_bytes(src[s - 2..s].try_into().unwrap()) as usize;
                 let length = 1 + ((src[s - 3] >> 2) as usize);
 
                 // Bounds check
@@ -268,7 +268,7 @@ fn s2_decode(dst: &mut [u8], src: &[u8]) -> Result<()> {
                 }
 
                 offset =
-                    u32::from_le_bytes([src[s - 4], src[s - 3], src[s - 2], src[s - 1]]) as usize;
+                    u32::from_le_bytes(src[s - 4..s].try_into().unwrap()) as usize;
                 let length = 1 + ((src[s - 5] >> 2) as usize);
 
                 // Bounds check
@@ -352,7 +352,7 @@ fn s2_decode_dict(dst: &mut [u8], src: &[u8], dict: &Dict) -> Result<()> {
                     return Err(Error::Corrupt);
                 }
 
-                offset = u16::from_le_bytes([src[s + 1], src[s + 2]]) as usize;
+                offset = u16::from_le_bytes(src[s + 1..s + 3].try_into().unwrap()) as usize;
                 let length = 1 + ((src[s] >> 2) as usize);
                 s += 3;
 
@@ -385,7 +385,7 @@ fn s2_decode_dict(dst: &mut [u8], src: &[u8], dict: &Dict) -> Result<()> {
                 }
 
                 offset =
-                    u32::from_le_bytes([src[s + 1], src[s + 2], src[s + 3], src[s + 4]]) as usize;
+                    u32::from_le_bytes(src[s + 1..s + 5].try_into().unwrap()) as usize;
                 let length = 1 + ((src[s] >> 2) as usize);
                 s += 5;
 
@@ -474,7 +474,7 @@ fn s2_decode_dict(dst: &mut [u8], src: &[u8], dict: &Dict) -> Result<()> {
                     return Err(Error::Corrupt);
                 }
 
-                offset = u16::from_le_bytes([src[s - 2], src[s - 1]]) as usize;
+                offset = u16::from_le_bytes(src[s - 2..s].try_into().unwrap()) as usize;
                 let length = 1 + ((src[s - 3] >> 2) as usize);
 
                 // Bounds check
@@ -507,7 +507,7 @@ fn s2_decode_dict(dst: &mut [u8], src: &[u8], dict: &Dict) -> Result<()> {
                 }
 
                 offset =
-                    u32::from_le_bytes([src[s - 4], src[s - 3], src[s - 2], src[s - 1]]) as usize;
+                    u32::from_le_bytes(src[s - 4..s].try_into().unwrap()) as usize;
                 let length = 1 + ((src[s - 5] >> 2) as usize);
 
                 // Bounds check
@@ -562,21 +562,23 @@ fn decode_literal_length(src: &[u8]) -> Result<(usize, usize)> {
             if src.len() < 3 {
                 return Err(Error::Corrupt);
             }
-            let len = u16::from_le_bytes([src[1], src[2]]) as usize;
+            let len = u16::from_le_bytes(src[1..3].try_into().unwrap()) as usize;
             Ok((len + 1, 3))
         }
         62 => {
             if src.len() < 4 {
                 return Err(Error::Corrupt);
             }
-            let len = u32::from_le_bytes([src[1], src[2], src[3], 0]) as usize;
+            // Read 4 bytes starting at src[0] and shift out the tag byte
+            // — this turns 3 indexed reads into one unaligned word load.
+            let len = (u32::from_le_bytes(src[0..4].try_into().unwrap()) >> 8) as usize;
             Ok((len + 1, 4))
         }
         63 => {
             if src.len() < 5 {
                 return Err(Error::Corrupt);
             }
-            let len = u32::from_le_bytes([src[1], src[2], src[3], src[4]]) as usize;
+            let len = u32::from_le_bytes(src[1..5].try_into().unwrap()) as usize;
             Ok((len + 1, 5))
         }
         _ => Err(Error::Corrupt),
@@ -607,14 +609,16 @@ fn decode_copy1(src: &[u8], last_offset: usize) -> Result<(usize, usize, usize)>
                 if src.len() < 4 {
                     return Err(Error::Corrupt);
                 }
-                length = u16::from_le_bytes([src[2], src[3]]) as usize + (1 << 8);
+                length = u16::from_le_bytes(src[2..4].try_into().unwrap()) as usize + (1 << 8);
                 Ok((last_offset, length + 4, 4))
             }
             7 => {
                 if src.len() < 5 {
                     return Err(Error::Corrupt);
                 }
-                length = u32::from_le_bytes([src[2], src[3], src[4], 0]) as usize + (1 << 16);
+                // Read 4 bytes starting at src[1] and shift out the count byte.
+                length = (u32::from_le_bytes(src[1..5].try_into().unwrap()) >> 8) as usize
+                    + (1 << 16);
                 Ok((last_offset, length + 4, 5))
             }
             _ => {
