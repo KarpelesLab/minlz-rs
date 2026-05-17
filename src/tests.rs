@@ -1668,34 +1668,34 @@ fn test_encode_zero_runs_roundtrip() {
     }
 }
 
-/// Regression test for an adversarial-varint OOM caught by libFuzzer.
+/// Regression test for adversarial-varint OOM inputs caught by
+/// libFuzzer (and a follow-on input found after the first fix).
 ///
-/// The 6-byte input below has a varint header that decodes to
-/// 0xeffd5b3ff ≈ 4 025 860 095, i.e. nearly 4 GiB. Before the fix,
-/// `decode()` called `Vec::with_capacity(4_025_860_095)` which
-/// asked the allocator for ~4 GiB and **aborted the process** when
-/// the request couldn't be satisfied (e.g. libFuzzer's default
-/// 2 GiB rss limit).
+/// Both inputs have varint headers that decode to multi-gigabyte
+/// lengths (~4 GiB and ~2.8 GiB respectively). 1.0.1's `try_reserve_exact`
+/// fix wasn't enough — on Linux `malloc` returns virtual address
+/// space without committing physical memory, so the alloc appears
+/// to succeed and the libFuzzer malloc interceptor aborts the
+/// process when its rss limit is crossed.
 ///
-/// The fix is to allocate via `try_reserve_exact` so the function
-/// returns `Err` instead of crashing. The exact error variant
-/// depends on the host:
-/// - On a small-memory host (CI fuzz runner, container) the
-///   allocator refuses → `Err(TooLarge)`.
-/// - On a roomy host (32 GiB dev machine) the allocator happily
-///   maps 4 GiB; the subsequent s2_decode pass sees only 0 bytes
-///   of payload and reports `Err(Corrupt)`.
-///
-/// Both outcomes are acceptable; what's NOT acceptable is panic /
-/// abort / returning `Ok`.
+/// 1.0.2 added a hard `MAX_DECODE_DST_SIZE` cap (256 MiB) that's
+/// checked before any allocation. Both inputs must now return
+/// `Err(TooLarge)` — anything else (panic, abort, Ok) is a
+/// regression.
 #[test]
-fn test_decode_oom_input_never_aborts() {
-    use crate::decode;
-    let adversarial: &[u8] = &[0xff, 0xff, 0xd6, 0xff, 0x8e, 0x00];
-    let result = decode(adversarial);
-    assert!(
-        result.is_err(),
-        "decode of adversarial 4 GiB varint must return Err (got Ok), \
-         and must not panic/abort"
-    );
+fn test_decode_oom_input_returns_too_large() {
+    use crate::{decode, Error};
+    let cases: &[(&str, &[u8])] = &[
+        // ~4 GiB request (the first one libFuzzer found)
+        ("4 GiB varint", &[0xff, 0xff, 0xd6, 0xff, 0x8e, 0x00]),
+        // ~2.8 GiB request (the second, found after try_reserve was added)
+        ("2.8 GiB varint", &[0xf8, 0xd2, 0xd2, 0xd2, 0x0a]),
+    ];
+    for (label, src) in cases {
+        match decode(src) {
+            Err(Error::TooLarge) => {}
+            Err(other) => panic!("{label}: expected TooLarge, got {other:?}"),
+            Ok(_) => panic!("{label}: must not return Ok on adversarial varint"),
+        }
+    }
 }

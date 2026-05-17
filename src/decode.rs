@@ -65,6 +65,25 @@ pub fn decode_with_dict(src: &[u8], dict: &Dict) -> Result<Vec<u8>> {
     Ok(dst)
 }
 
+/// Hard cap on the decoded length the block-format decoder will accept.
+///
+/// The S2 wire format encodes the decoded length as a varint that can
+/// represent up to 2^32 − 1 bytes (≈ 4 GiB). Accepting that at face
+/// value lets a 5-byte adversarial input force a multi-gigabyte
+/// allocation; on Linux the `malloc` returns virtual address space
+/// without committing physical memory, so even `try_reserve_exact`
+/// cannot detect the problem reliably (it succeeds, then later writes
+/// page-fault). libFuzzer's malloc interceptor then aborts the
+/// process when the request crosses its rss limit.
+///
+/// 256 MiB is well past any realistic single-block use (the stream
+/// format already caps individual blocks at `MAX_BLOCK_SIZE` = 4 MiB)
+/// and far below libFuzzer's 2 GiB default. Callers who need to
+/// decode arbitrarily large payloads should use the stream
+/// [`Reader`](crate::Reader) API instead, which processes one capped
+/// block at a time.
+pub const MAX_DECODE_DST_SIZE: usize = 256 * 1024 * 1024;
+
 /// Allocate a `Vec<u8>` of length `n` whose bytes are *uninitialized*.
 ///
 /// The S2 decoder writes every byte of the destination from 0..len before
@@ -73,18 +92,21 @@ pub fn decode_with_dict(src: &[u8], dict: &Dict) -> Result<Vec<u8>> {
 /// otherwise perform — that memset is the single largest cost on the
 /// decode path for small/medium blocks (≈ 80 % of cycles).
 ///
-/// Uses `try_reserve_exact` so that an attacker-supplied length header
-/// claiming a gigabyte-sized output returns [`Error::TooLarge`] instead
-/// of aborting the process with OOM. (libFuzzer caught a 6-byte
-/// adversarial input whose varint header claimed ~4 GiB; the format
-/// permits up to 4 GiB legitimately, so we don't reject by size — we
-/// just refuse to crash when the allocator can't satisfy the request.)
+/// Two layers protect against adversarial length headers:
+///   1. A hard cap at [`MAX_DECODE_DST_SIZE`] rejects obviously
+///      malicious requests up front.
+///   2. `try_reserve_exact` covers the rest, returning
+///      [`Error::TooLarge`] when the allocator itself can't satisfy
+///      the request.
 ///
 /// If the decoder returns Err, the partially-uninitialized Vec is dropped;
 /// that is safe because `u8` has no Drop and no code path reads from the
 /// uninit prefix.
 #[inline]
 fn alloc_uninit_dst(n: usize) -> Result<Vec<u8>> {
+    if n > MAX_DECODE_DST_SIZE {
+        return Err(Error::TooLarge);
+    }
     let mut v: Vec<u8> = Vec::new();
     v.try_reserve_exact(n).map_err(|_| Error::TooLarge)?;
     // SAFETY: capacity is now ≥ `n`. The decoder fully initializes
