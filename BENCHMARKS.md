@@ -27,27 +27,30 @@ from MiB/s to MB/s using `× 1.048576`.
 
 ### Standard (`encode` / `s2.Encode`)
 
-Go uses hand-written AMD64 assembly with explicit SIMD for the
-match-search inner loop; minlz is pure Rust relying on LLVM
-autovectorization.
+Both implementations now use the same fundamental algorithm — minlz
+ports klauspost/compress/s2's per-size-bucket asm variants
+(`encodeBlockAsm8B`/`10B`/`12B`/`4MB`) to bit-compatible Rust. Three
+hashes per scalar iteration covering s, s+1, s+2, free repeat-first
+check, plus the same `(s − next_emit) >> N + 4` skip stride. Output
+is byte-for-byte identical to Go's `s2.Encode` on every tested
+input. Go retains an edge mainly because its asm uses AVX2 SIMD
+`memmove` for the large literal copies; minlz still relies on
+`copy_from_slice` (LLVM autovec).
 
 | Data Size | Pattern    | Rust (MB/s) | Go (MB/s) | Rust / Go |
 |-----------|------------|-------------|-----------|-----------|
-| 1 KB      | Random     | 4720        | 6502      | 0.73×     |
-| 1 KB      | Repeated   | 6115        | 13308     | 0.46×     |
-| 1 KB      | Text       | 5811        | 10105     | 0.58×     |
-| 1 KB      | Sequential | 4401        | 6367      | 0.69×     |
-| 10 KB     | Random     | 8839        | 24851     | 0.36×     |
-| 10 KB     | Repeated   | 9468        | 28785     | 0.33×     |
-| 10 KB     | Text       | 9139        | 27667     | 0.33×     |
-| 10 KB     | Sequential | 6221        | 24311     | 0.26×     |
-| 100 KB    | Random     | 9498        | 33225     | 0.29×     |
-| 100 KB    | Repeated   | 9013        | 32433     | 0.28×     |
-| 100 KB    | Text       | 8994        | 32837     | 0.27×     |
-| 100 KB    | Sequential | 9665        | 32444     | 0.30×     |
-
-Go's AVX2 literal-emit and table lookups beat us by 2–4× on this
-mode. This is the cleanest place for future SIMD work in `minlz`.
+| 1 KB      | Random     |  5391       |  6502     | 0.83×     |
+| 1 KB      | Repeated   |  6780       | 13308     | 0.51×     |
+| 1 KB      | Text       |  7565       | 10105     | 0.75×     |
+| 1 KB      | Sequential |  5542       |  6367     | 0.87×     |
+| 10 KB     | Random     | 16040       | 24851     | 0.65×     |
+| 10 KB     | Repeated   | 12526       | 28785     | 0.44×     |
+| 10 KB     | Text       | 17207       | 27667     | 0.62×     |
+| 10 KB     | Sequential | 16041       | 24311     | 0.66×     |
+| 100 KB    | Random     | 20231       | 33225     | 0.61×     |
+| 100 KB    | Repeated   | 13491       | 32433     | 0.42×     |
+| 100 KB    | Text       | 19288       | 32837     | 0.59×     |
+| 100 KB    | Sequential | 20518       | 32444     | 0.63×     |
 
 ### Better (`encode_better` / `s2.EncodeBetter`)
 
@@ -147,10 +150,11 @@ remaining lever for that mode.
   AMD64 assembly path.
 
 ### Where Go beats minlz
-- **`encode` (standard mode), all sizes**: Go is 2–4× faster, owing
-  almost entirely to its hand-tuned AVX2 inner loop. Future versions
-  of minlz could close this gap with explicit SIMD intrinsics or
-  inline assembly.
+- **`encode` (standard mode), repeat-heavy data**: Go is ~2× faster.
+  All remaining gap is in the literal/copy `memmove` — Go uses AVX2
+  16-byte SIMD moves; we use `copy_from_slice` (LLVM autovec). For
+  other patterns the gap is now 0.6–0.9×, down from 0.3× before the
+  asm port.
 - **`encode_better` on 100 KB inputs**: Go is ~20% faster.
 
 ### Where they tie

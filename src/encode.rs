@@ -701,6 +701,25 @@ fn hash4_asm(val: u32, h: u32) -> usize {
     (val.wrapping_mul(0x9e3779b1) >> (32 - h)) as usize
 }
 
+/// 5-byte Knuth hash, matching `encodeBlockAsm12B`. The asm shifts
+/// the u64 left by 24 (`SHLQ $0x18`) before multiplying so only the
+/// low 5 bytes of `cv` contribute to the hash; the high 3 bytes are
+/// discarded.
+#[inline(always)]
+fn hash5_asm(cv: u64, h: u32) -> usize {
+    ((cv << 24).wrapping_mul(0x9e3779b1) >> ((64 - h) & 63)) as usize
+}
+
+/// 6-byte hash with the prime6bytes constant, matching
+/// `encodeBlockAsm4MB` and `encodeBlockAsm` (the >= 4 MiB variant).
+/// The asm shifts the u64 left by 16 (`SHLQ $0x10`) before
+/// multiplying.
+#[inline(always)]
+fn hash6_asm(cv: u64, h: u32) -> usize {
+    const PRIME_6_BYTES: u64 = 0x0000_cf1b_bcdc_bf9b;
+    ((cv << 16).wrapping_mul(PRIME_6_BYTES) >> ((64 - h) & 63)) as usize
+}
+
 /// Load a u32 from the slice at the given offset.
 /// Reading the bytes through a single slice + try_into lets LLVM elide
 /// the per-byte bounds checks and emit one unaligned 4-byte load.
@@ -729,151 +748,21 @@ fn encode_block(dst: &mut [u8], src: &[u8], table_buf: &mut Vec<u32>) -> usize {
         return 0;
     }
 
-    // Asm-port path for inputs in the 10B bucket: [512 B, 4 KiB).
-    // Matches klauspost/compress/s2's encodeBlockAsm10B byte-for-byte.
-    if src.len() >= 512 && src.len() < 4096 {
+    // Asm-port path matching klauspost/compress/s2's
+    // encodeBlockAsm{8B,10B,12B,4MB} byte-for-byte. The 8B variant
+    // handles inputs in [MIN_NON_LITERAL_BLOCK_SIZE, 512); 10B
+    // [512, 4 KiB); 12B [4 KiB, 16 KiB); 4MB [16 KiB, ∞). All
+    // other paths below are unreachable.
+    if src.len() < 512 {
+        return encode_block_8b_asm(dst, src, table_buf);
+    }
+    if src.len() < 4096 {
         return encode_block_10b_asm(dst, src, table_buf);
     }
-
-    // Hash table size — pick the smallest that still gives good collision
-    // behavior for the input. Smaller tables fit in L1 and (more importantly
-    // for tiny blocks) avoid zeroing 64 KB on every call.
-    let table_bits: u32 = if src.len() < 1024 {
-        10
-    } else if src.len() < 8 * 1024 {
-        12
-    } else if src.len() <= 64 * 1024 {
-        14
-    } else {
-        17
-    };
-    let table_size = 1usize << table_bits;
-    let shift = 32 - table_bits;
-
-    ensure_zeroed_u32(table_buf, table_size);
-    let table = table_buf.as_mut_slice();
-
-    let s_limit = src.len() - INPUT_MARGIN;
-    let mut next_emit = 0;
-    let mut s = 1;
-    let mut d = 0;
-
-    #[allow(unused_variables)]
-    let cv = load64(src, s);
-
-    'outer: loop {
-        let mut candidate;
-        let mut skip = 32;
-
-        // Search for next match (with skipping)
-        'search: loop {
-            let next_s = s + (skip >> 5);
-            skip += 1;
-
-            if next_s > s_limit {
-                break 'outer;
-            }
-
-            let h = hash(&src[s..], shift);
-            candidate = table[h] as usize;
-            table[h] = s as u32;
-
-            if load32(src, s) == load32(src, candidate) {
-                break 'search;
-            }
-
-            s = next_s;
-        }
-
-        // Inner loop: emit matches as long as there are immediate matches
-        'emit_copies: loop {
-            // Extend backwards
-            while candidate > 0 && s > next_emit && src[candidate - 1] == src[s - 1] {
-                candidate -= 1;
-                s -= 1;
-            }
-
-            // Emit literal
-            if s > next_emit {
-                d += emit_literal(&mut dst[d..], &src[next_emit..s]);
-            }
-
-            // Extend the match forward
-            let base = s;
-            let offset = base - candidate;
-            s += 4;
-            candidate += 4;
-
-            while s <= src.len() - 8 {
-                if load64(src, s) != load64(src, candidate) {
-                    let diff = (load64(src, s) ^ load64(src, candidate)).trailing_zeros() / 8;
-                    s += diff as usize;
-                    // Keep candidate aligned with s so the remaining-bytes
-                    // loop below doesn't re-process bytes we already
-                    // verified inside the 8-byte block.
-                    candidate += diff as usize;
-                    break;
-                }
-                s += 8;
-                candidate += 8;
-            }
-
-            // Check remaining bytes (0-7 bytes) after the 8-byte aligned loop.
-            // After a diff-break above, src[s] is the first byte we know
-            // differs, so this loop will exit immediately. When the 8-byte
-            // loop ran out of room (s > src.len() - 8), s and candidate are
-            // still in sync from the lock-step s += 8 / candidate += 8.
-            while s < src.len() && candidate < s && src[s] == src[candidate] {
-                s += 1;
-                candidate += 1;
-            }
-
-            // Emit copy (emit_copy handles repeat optimization internally)
-            d += emit_copy(&mut dst[d..], offset, s - base);
-            next_emit = s;
-
-            // IMPORTANT: Check for immediate matches BEFORE checking s_limit
-            // This matches Go's behavior where immediate match check comes first
-
-            if s >= s_limit {
-                // At or past limit, emit remaining and exit
-                break 'outer;
-            }
-
-            // Check for immediate match at current position (like Go's encodeBlockGo)
-            // Update hash table for s-2 and s
-            if s >= 2 {
-                let h_back = hash(&src[s - 2..], shift);
-                table[h_back] = (s - 2) as u32;
-            }
-
-            let h_curr = hash(&src[s..], shift);
-            candidate = table[h_curr] as usize;
-            table[h_curr] = s as u32;
-
-            // Check if there's an immediate match (with safety check)
-            if candidate < s && s + 4 <= src.len() && load32(src, s) == load32(src, candidate) {
-                // Continue emitting copies
-                continue 'emit_copies;
-            }
-
-            // No immediate match, advance to next position and search again
-            s += 1;
-            break 'emit_copies;
-        }
+    if src.len() < 16384 {
+        return encode_block_12b_asm(dst, src, table_buf);
     }
-
-    // Emit remaining
-    if next_emit < src.len() {
-        d += emit_literal(&mut dst[d..], &src[next_emit..]);
-    }
-
-    // Check if compression was worthwhile
-    if d >= src.len() - src.len() / 32 {
-        return 0;
-    }
-
-    d
+    encode_block_4mb_asm(dst, src, table_buf)
 }
 
 /// Port of klauspost/compress/s2's `encodeBlockAsm10B` (single-thread
@@ -1067,6 +956,501 @@ fn encode_block_10b_asm(dst: &mut [u8], src: &[u8], table_buf: &mut Vec<u32>) ->
                 break;
             }
             // Immediate follow-on match — chain it.
+        }
+    }
+
+    if next_emit < src.len() {
+        if d + src.len() - next_emit > dst_limit {
+            return 0;
+        }
+        d += emit_literal(&mut dst[d..], &src[next_emit..]);
+    }
+    if d >= src.len() - src.len() / 32 {
+        return 0;
+    }
+    d
+}
+
+/// Port of `encodeBlockAsm8B` — used for src < 512 B. Same shape as
+/// the 10B variant; 4-byte Knuth hash, 8-bit table, skip shift 4.
+fn encode_block_8b_asm(dst: &mut [u8], src: &[u8], table_buf: &mut Vec<u32>) -> usize {
+    debug_assert!(src.len() >= MIN_NON_LITERAL_BLOCK_SIZE);
+    debug_assert!(src.len() < 512);
+
+    const TABLE_BITS: u32 = 8;
+    const TABLE_SIZE: usize = 1 << TABLE_BITS;
+    const SKIP_SHIFT: u32 = 4;
+
+    ensure_zeroed_u32(table_buf, TABLE_SIZE);
+    let table = table_buf.as_mut_slice();
+
+    let s_limit = src.len() - INPUT_MARGIN;
+    let dst_limit = src.len() - src.len() / 32 - 5;
+    let mut next_emit: usize = 0;
+    let mut s: usize = 1;
+    let mut cv = load64(src, s);
+    let mut repeat: usize = 1;
+    let mut d: usize = 0;
+
+    'outer: loop {
+        let mut candidate: usize;
+
+        'search: loop {
+            let next_s = s + ((s - next_emit) >> SKIP_SHIFT) + 4;
+            if next_s > s_limit {
+                break 'outer;
+            }
+            let hash0 = hash4_asm(cv as u32, TABLE_BITS);
+            let hash1 = hash4_asm((cv >> 8) as u32, TABLE_BITS);
+            candidate = table[hash0] as usize;
+            let candidate2 = table[hash1] as usize;
+            table[hash0] = s as u32;
+            table[hash1] = (s + 1) as u32;
+            let hash2 = hash4_asm((cv >> 16) as u32, TABLE_BITS);
+
+            if (cv >> 8) as u32 == load32(src, s + 1 - repeat) {
+                let mut base = s + 1;
+                let mut i = base - repeat;
+                while base > next_emit && i > 0 && src[i - 1] == src[base - 1] {
+                    i -= 1;
+                    base -= 1;
+                }
+                if d + (base - next_emit) + 3 > dst_limit {
+                    return 0;
+                }
+                d += emit_literal(&mut dst[d..], &src[next_emit..base]);
+                let mut cand = s - repeat + 4 + 1;
+                s += 4 + 1;
+                while s + 8 <= src.len() {
+                    let diff = load64(src, s) ^ load64(src, cand);
+                    if diff != 0 {
+                        s += (diff.trailing_zeros() / 8) as usize;
+                        break;
+                    }
+                    s += 8;
+                    cand += 8;
+                }
+                while s < src.len() && src[s] == src[cand] {
+                    s += 1;
+                    cand += 1;
+                }
+                if next_emit > 0 {
+                    d += emit_repeat(&mut dst[d..], repeat, s - base);
+                } else {
+                    d += emit_copy(&mut dst[d..], repeat, s - base);
+                }
+                next_emit = s;
+                if s >= s_limit {
+                    break 'outer;
+                }
+                cv = load64(src, s);
+                continue 'search;
+            }
+
+            if (cv as u32) == load32(src, candidate) {
+                break 'search;
+            }
+            candidate = table[hash2] as usize;
+            if (cv >> 8) as u32 == load32(src, candidate2) {
+                table[hash2] = (s + 2) as u32;
+                candidate = candidate2;
+                s += 1;
+                break 'search;
+            }
+            table[hash2] = (s + 2) as u32;
+            if (cv >> 16) as u32 == load32(src, candidate) {
+                s += 2;
+                break 'search;
+            }
+
+            cv = load64(src, next_s);
+            s = next_s;
+        }
+
+        while candidate > 0 && s > next_emit && src[candidate - 1] == src[s - 1] {
+            candidate -= 1;
+            s -= 1;
+        }
+        if d + (s - next_emit) > dst_limit {
+            return 0;
+        }
+        d += emit_literal(&mut dst[d..], &src[next_emit..s]);
+
+        loop {
+            let base = s;
+            let offset = base - candidate;
+            s += 4;
+            let mut cand = candidate + 4;
+            while s + 8 <= src.len() {
+                let diff = load64(src, s) ^ load64(src, cand);
+                if diff != 0 {
+                    s += (diff.trailing_zeros() / 8) as usize;
+                    break;
+                }
+                s += 8;
+                cand += 8;
+            }
+            while s < src.len() && src[s] == src[cand] {
+                s += 1;
+                cand += 1;
+            }
+
+            if offset == repeat {
+                d += emit_repeat(&mut dst[d..], offset, s - base);
+            } else {
+                d += emit_copy(&mut dst[d..], offset, s - base);
+                repeat = offset;
+            }
+            next_emit = s;
+            if s >= s_limit {
+                break 'outer;
+            }
+            if d > dst_limit {
+                return 0;
+            }
+
+            let x = load64(src, s - 2);
+            let prev_hash = hash4_asm(x as u32, TABLE_BITS);
+            table[prev_hash] = (s - 2) as u32;
+            let curr_hash = hash4_asm((x >> 16) as u32, TABLE_BITS);
+            candidate = table[curr_hash] as usize;
+            table[curr_hash] = s as u32;
+            if (x >> 16) as u32 != load32(src, candidate) {
+                cv = load64(src, s + 1);
+                s += 1;
+                break;
+            }
+        }
+    }
+
+    if next_emit < src.len() {
+        if d + src.len() - next_emit > dst_limit {
+            return 0;
+        }
+        d += emit_literal(&mut dst[d..], &src[next_emit..]);
+    }
+    if d >= src.len() - src.len() / 32 {
+        return 0;
+    }
+    d
+}
+
+/// Port of `encodeBlockAsm12B` — used for 4 KiB ≤ src < 16 KiB.
+/// Same algorithm shape as the 10B variant; differs only in:
+///   - hash is `hash5_asm` (5-byte window)
+///   - table is 12-bit (4096 u32 entries)
+///   - skip shift stays at 5
+fn encode_block_12b_asm(dst: &mut [u8], src: &[u8], table_buf: &mut Vec<u32>) -> usize {
+    debug_assert!(src.len() >= 4096);
+    debug_assert!(src.len() < 16384);
+
+    const TABLE_BITS: u32 = 12;
+    const TABLE_SIZE: usize = 1 << TABLE_BITS;
+    const SKIP_SHIFT: u32 = 5;
+
+    ensure_zeroed_u32(table_buf, TABLE_SIZE);
+    let table = table_buf.as_mut_slice();
+
+    let s_limit = src.len() - INPUT_MARGIN;
+    let dst_limit = src.len() - src.len() / 32 - 5;
+    let mut next_emit: usize = 0;
+    let mut s: usize = 1;
+    let mut cv = load64(src, s);
+    let mut repeat: usize = 1;
+    let mut d: usize = 0;
+
+    'outer: loop {
+        let mut candidate: usize;
+
+        'search: loop {
+            let next_s = s + ((s - next_emit) >> SKIP_SHIFT) + 4;
+            if next_s > s_limit {
+                break 'outer;
+            }
+            let hash0 = hash5_asm(cv, TABLE_BITS);
+            let hash1 = hash5_asm(cv >> 8, TABLE_BITS);
+            candidate = table[hash0] as usize;
+            let candidate2 = table[hash1] as usize;
+            table[hash0] = s as u32;
+            table[hash1] = (s + 1) as u32;
+            let hash2 = hash5_asm(cv >> 16, TABLE_BITS);
+
+            if (cv >> 8) as u32 == load32(src, s + 1 - repeat) {
+                let mut base = s + 1;
+                let mut i = base - repeat;
+                while base > next_emit && i > 0 && src[i - 1] == src[base - 1] {
+                    i -= 1;
+                    base -= 1;
+                }
+                if d + (base - next_emit) + 3 > dst_limit {
+                    return 0;
+                }
+                d += emit_literal(&mut dst[d..], &src[next_emit..base]);
+                let mut cand = s - repeat + 4 + 1;
+                s += 4 + 1;
+                while s + 8 <= src.len() {
+                    let diff = load64(src, s) ^ load64(src, cand);
+                    if diff != 0 {
+                        s += (diff.trailing_zeros() / 8) as usize;
+                        break;
+                    }
+                    s += 8;
+                    cand += 8;
+                }
+                while s < src.len() && src[s] == src[cand] {
+                    s += 1;
+                    cand += 1;
+                }
+                if next_emit > 0 {
+                    d += emit_repeat(&mut dst[d..], repeat, s - base);
+                } else {
+                    d += emit_copy(&mut dst[d..], repeat, s - base);
+                }
+                next_emit = s;
+                if s >= s_limit {
+                    break 'outer;
+                }
+                cv = load64(src, s);
+                continue 'search;
+            }
+
+            if (cv as u32) == load32(src, candidate) {
+                break 'search;
+            }
+            candidate = table[hash2] as usize;
+            if (cv >> 8) as u32 == load32(src, candidate2) {
+                table[hash2] = (s + 2) as u32;
+                candidate = candidate2;
+                s += 1;
+                break 'search;
+            }
+            table[hash2] = (s + 2) as u32;
+            if (cv >> 16) as u32 == load32(src, candidate) {
+                s += 2;
+                break 'search;
+            }
+
+            cv = load64(src, next_s);
+            s = next_s;
+        }
+
+        while candidate > 0 && s > next_emit && src[candidate - 1] == src[s - 1] {
+            candidate -= 1;
+            s -= 1;
+        }
+        if d + (s - next_emit) > dst_limit {
+            return 0;
+        }
+        d += emit_literal(&mut dst[d..], &src[next_emit..s]);
+
+        loop {
+            let base = s;
+            let offset = base - candidate;
+            s += 4;
+            let mut cand = candidate + 4;
+            while s + 8 <= src.len() {
+                let diff = load64(src, s) ^ load64(src, cand);
+                if diff != 0 {
+                    s += (diff.trailing_zeros() / 8) as usize;
+                    break;
+                }
+                s += 8;
+                cand += 8;
+            }
+            while s < src.len() && src[s] == src[cand] {
+                s += 1;
+                cand += 1;
+            }
+
+            if offset == repeat {
+                d += emit_repeat(&mut dst[d..], offset, s - base);
+            } else {
+                d += emit_copy(&mut dst[d..], offset, s - base);
+                repeat = offset;
+            }
+            next_emit = s;
+            if s >= s_limit {
+                break 'outer;
+            }
+            if d > dst_limit {
+                return 0;
+            }
+
+            let x = load64(src, s - 2);
+            let prev_hash = hash5_asm(x, TABLE_BITS);
+            table[prev_hash] = (s - 2) as u32;
+            let curr_hash = hash5_asm(x >> 16, TABLE_BITS);
+            candidate = table[curr_hash] as usize;
+            table[curr_hash] = s as u32;
+            if (x >> 16) as u32 != load32(src, candidate) {
+                cv = load64(src, s + 1);
+                s += 1;
+                break;
+            }
+        }
+    }
+
+    if next_emit < src.len() {
+        if d + src.len() - next_emit > dst_limit {
+            return 0;
+        }
+        d += emit_literal(&mut dst[d..], &src[next_emit..]);
+    }
+    if d >= src.len() - src.len() / 32 {
+        return 0;
+    }
+    d
+}
+
+/// Port of `encodeBlockAsm4MB` — used for 16 KiB ≤ src < 4 MiB.
+/// 6-byte hash with prime6bytes (`hash6_asm`), 14-bit table, skip
+/// shift 6. Algorithm shape identical to 10B/12B.
+fn encode_block_4mb_asm(dst: &mut [u8], src: &[u8], table_buf: &mut Vec<u32>) -> usize {
+    debug_assert!(src.len() >= 16384);
+
+    const TABLE_BITS: u32 = 14;
+    const TABLE_SIZE: usize = 1 << TABLE_BITS;
+    const SKIP_SHIFT: u32 = 6;
+
+    ensure_zeroed_u32(table_buf, TABLE_SIZE);
+    let table = table_buf.as_mut_slice();
+
+    let s_limit = src.len() - INPUT_MARGIN;
+    let dst_limit = src.len() - src.len() / 32 - 5;
+    let mut next_emit: usize = 0;
+    let mut s: usize = 1;
+    let mut cv = load64(src, s);
+    let mut repeat: usize = 1;
+    let mut d: usize = 0;
+
+    'outer: loop {
+        let mut candidate: usize;
+
+        'search: loop {
+            let next_s = s + ((s - next_emit) >> SKIP_SHIFT) + 4;
+            if next_s > s_limit {
+                break 'outer;
+            }
+            let hash0 = hash6_asm(cv, TABLE_BITS);
+            let hash1 = hash6_asm(cv >> 8, TABLE_BITS);
+            candidate = table[hash0] as usize;
+            let candidate2 = table[hash1] as usize;
+            table[hash0] = s as u32;
+            table[hash1] = (s + 1) as u32;
+            let hash2 = hash6_asm(cv >> 16, TABLE_BITS);
+
+            if (cv >> 8) as u32 == load32(src, s + 1 - repeat) {
+                let mut base = s + 1;
+                let mut i = base - repeat;
+                while base > next_emit && i > 0 && src[i - 1] == src[base - 1] {
+                    i -= 1;
+                    base -= 1;
+                }
+                if d + (base - next_emit) + 3 > dst_limit {
+                    return 0;
+                }
+                d += emit_literal(&mut dst[d..], &src[next_emit..base]);
+                let mut cand = s - repeat + 4 + 1;
+                s += 4 + 1;
+                while s + 8 <= src.len() {
+                    let diff = load64(src, s) ^ load64(src, cand);
+                    if diff != 0 {
+                        s += (diff.trailing_zeros() / 8) as usize;
+                        break;
+                    }
+                    s += 8;
+                    cand += 8;
+                }
+                while s < src.len() && src[s] == src[cand] {
+                    s += 1;
+                    cand += 1;
+                }
+                if next_emit > 0 {
+                    d += emit_repeat(&mut dst[d..], repeat, s - base);
+                } else {
+                    d += emit_copy(&mut dst[d..], repeat, s - base);
+                }
+                next_emit = s;
+                if s >= s_limit {
+                    break 'outer;
+                }
+                cv = load64(src, s);
+                continue 'search;
+            }
+
+            if (cv as u32) == load32(src, candidate) {
+                break 'search;
+            }
+            candidate = table[hash2] as usize;
+            if (cv >> 8) as u32 == load32(src, candidate2) {
+                table[hash2] = (s + 2) as u32;
+                candidate = candidate2;
+                s += 1;
+                break 'search;
+            }
+            table[hash2] = (s + 2) as u32;
+            if (cv >> 16) as u32 == load32(src, candidate) {
+                s += 2;
+                break 'search;
+            }
+
+            cv = load64(src, next_s);
+            s = next_s;
+        }
+
+        while candidate > 0 && s > next_emit && src[candidate - 1] == src[s - 1] {
+            candidate -= 1;
+            s -= 1;
+        }
+        if d + (s - next_emit) > dst_limit {
+            return 0;
+        }
+        d += emit_literal(&mut dst[d..], &src[next_emit..s]);
+
+        loop {
+            let base = s;
+            let offset = base - candidate;
+            s += 4;
+            let mut cand = candidate + 4;
+            while s + 8 <= src.len() {
+                let diff = load64(src, s) ^ load64(src, cand);
+                if diff != 0 {
+                    s += (diff.trailing_zeros() / 8) as usize;
+                    break;
+                }
+                s += 8;
+                cand += 8;
+            }
+            while s < src.len() && src[s] == src[cand] {
+                s += 1;
+                cand += 1;
+            }
+
+            if offset == repeat {
+                d += emit_repeat(&mut dst[d..], offset, s - base);
+            } else {
+                d += emit_copy(&mut dst[d..], offset, s - base);
+                repeat = offset;
+            }
+            next_emit = s;
+            if s >= s_limit {
+                break 'outer;
+            }
+            if d > dst_limit {
+                return 0;
+            }
+
+            let x = load64(src, s - 2);
+            let prev_hash = hash6_asm(x, TABLE_BITS);
+            table[prev_hash] = (s - 2) as u32;
+            let curr_hash = hash6_asm(x >> 16, TABLE_BITS);
+            candidate = table[curr_hash] as usize;
+            table[curr_hash] = s as u32;
+            if (x >> 16) as u32 != load32(src, candidate) {
+                cv = load64(src, s + 1);
+                s += 1;
+                break;
+            }
         }
     }
 
