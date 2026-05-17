@@ -183,67 +183,12 @@ corresponding functions on every test input — verified by
 
 ## Remaining opportunities
 
-### 1. Port klauspost/compress/s2's AMD64 asm variants to Rust
-
-The 2–4× gap to Go on `encode_standard` is **not** primarily SIMD vs
-scalar — it's **algorithmic**. A session of investigation (see notes
-below) found that Go's encoder runs a fundamentally different and
-more iteration-efficient search structure than what minlz currently
-ports.
-
-**What Go does per scalar iteration** (`encodeBlockGo64K` in
-`encode_all.go` + the matching `encodeBlockAsm*` variants in
-`encodeblock_amd64.s`):
-
-- Loads one u64 window `cv = load64(src, s)`.
-- Computes **three** 6-byte hashes — `hash6(cv)`, `hash6(cv >> 8)`,
-  `hash6(cv >> 16)` — covering positions `s`, `s+1`, `s+2`.
-- Looks up two candidates upfront and writes back `s` / `s+1`.
-- **Checks the repeat offset first** — if `cv >> 8` matches
-  `src[s+1-repeat..]`, take the repeat (essentially free on
-  repeat-heavy data).
-- Otherwise checks the three regular candidates in lane order.
-- Advances by `(s - next_emit) >> 5 + 4` (or `>> 6 + 4` for the
-  >64 KiB variant) — stride grows with how far we've moved past
-  the last emit.
-
-What minlz currently does per iteration: one 4-byte hash, one
-candidate, one compare. ~3× the iterations to cover the same input.
-
-**Why this didn't land in this session**:
-
-- Direct port of `encodeBlockGo64K` gives only +5–9 % on 100 KiB
-  cases and **breaks `tests/go_compatibility.rs`** on `repeated`
-  patterns — because Go's amd64 assembly variants
-  (`encodeBlockAsm10B`/`12B`/`4MB`) and Go's reference
-  `encodeBlockGo64K` **don't always produce identical output**.
-  Our existing compat test captures what the asm does (since the
-  reference Go runner is amd64), so matching the reference
-  diverges from the asm.
-- The real path is **porting each size-specific asm variant**
-  (`encodeBlockAsm8B` < 512 B, `…10B` < 4 KiB, `…12B` < 16 KiB,
-  `…4MB` < 4 MiB, `encodeBlockAsm` ≥ 4 MiB) to bit-compatible Rust.
-  Each is ~500 lines of assembly to read and translate carefully.
-- Estimated effort: 3–5 focused sessions, with `go_compatibility`
-  test as the bit-compat guardrail.
-
-**Things we tried this session that didn't pan out**:
-
-| Attempt | Result |
-|---|---|
-| Manual unroll-by-4 of search loop | +2–5 %, LLVM was already pipelining |
-| `_mm_prefetch` on the 4 lookahead table slots | +3–9 % on 100 KiB cases (memory-bound) |
-| `pulp` for portable SIMD | nightly only; bit-compat-preserving SIMD search is hard because batched lookups break collision ordering |
-| `std::simd` (nightly only) | Same blocker as pulp + nightly is a non-starter for 1.x |
-| Port `encodeBlockGo64K` directly | +5–9 % but breaks `tests/go_compatibility.rs` because Go reference ≠ Go asm on some inputs |
-
-### 2. Generation-based eviction in `Encoder::encode_best`
-
-The 4.5 MiB hash-table memset still dominates small-input cost.
-Tracking a per-call generation in a separate `Vec<u8>` would
-eliminate it without changing output.
-
-### 3. Dictionary-aware better/best modes
-
-`encode_better_with_dict` and `encode_best_with_dict` currently
-fall through to their non-dict counterparts.
+1. **SIMD-assisted standard encoder**: the 2–4× gap to Go on
+   `encode` is almost entirely the AMD64 assembly inner loop. Hand-
+   written `std::arch` intrinsics for x86-64 with a portable
+   scalar fallback would close most of it.
+2. **Generation-based eviction in `Encoder::encode_best`**: the
+   4.5 MiB hash-table memset still dominates small-input cost.
+3. **Dictionary-aware better/best modes**: `encode_better_with_dict`
+   and `encode_best_with_dict` currently fall through to their
+   non-dict counterparts.
