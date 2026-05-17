@@ -5,36 +5,33 @@ use minlz::{Reader, Writer};
 use std::io::{Read, Write};
 
 fuzz_target!(|data: &[u8]| {
-    // Skip very large inputs
+    // Skip very large inputs to keep the fuzzer's memory under the
+    // libFuzzer default limit.
     if data.len() > 1_000_000 {
         return;
     }
 
-    // Test stream format roundtrip
+    // Stream roundtrip: compress through Writer, then decompress through
+    // Reader and assert we get the original bytes back. Writer/Reader I/O
+    // must not panic; the inner closure is intentionally infallible (any
+    // panic will be reported as a fuzz crash).
     let mut compressed = Vec::new();
-    if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let mut writer = Writer::new(&mut compressed);
-        writer.write_all(data).ok()?;
-        writer.flush().ok()
-    }))
-    .is_ok()
     {
-        if let Ok(()) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let mut reader = Reader::new(&compressed[..]);
-            let mut decompressed = Vec::new();
-            reader.read_to_end(&mut decompressed).ok()?;
-
-            if decompressed == data {
-                Some(())
-            } else {
-                None
-            }
-        })) {
-            // Success
-        }
+        let mut writer = Writer::new(&mut compressed);
+        let _ = writer.write_all(data);
+        let _ = writer.flush();
     }
+    let mut decompressed = Vec::new();
+    let mut reader = Reader::new(&compressed[..]);
+    let _ = reader.read_to_end(&mut decompressed);
+    assert_eq!(
+        data, &decompressed[..],
+        "stream roundtrip produced different bytes"
+    );
 
-    // Also test reading arbitrary stream data - should not panic
+    // Independently: reading arbitrary attacker-controlled bytes through
+    // the Reader must not panic — it should either decode successfully
+    // or return an io::Error.
     let mut reader = Reader::new(data);
     let mut buf = Vec::new();
     let _ = reader.read_to_end(&mut buf);

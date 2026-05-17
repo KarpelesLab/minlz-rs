@@ -43,7 +43,7 @@ impl Default for Decoder {
 /// The dst and src must not overlap. It is valid to pass an empty dst.
 pub fn decode(src: &[u8]) -> Result<Vec<u8>> {
     let (dlen, header_len) = decode_len(src)?;
-    let mut dst = alloc_uninit_dst(dlen);
+    let mut dst = alloc_uninit_dst(dlen)?;
     s2_decode(&mut dst, &src[header_len..])?;
     Ok(dst)
 }
@@ -60,7 +60,7 @@ pub fn decode_snappy(src: &[u8]) -> Result<Vec<u8>> {
 /// Early copy operations may reference the dictionary instead of already-decoded output.
 pub fn decode_with_dict(src: &[u8], dict: &Dict) -> Result<Vec<u8>> {
     let (dlen, header_len) = decode_len(src)?;
-    let mut dst = alloc_uninit_dst(dlen);
+    let mut dst = alloc_uninit_dst(dlen)?;
     s2_decode_dict(&mut dst, &src[header_len..], dict)?;
     Ok(dst)
 }
@@ -73,21 +73,29 @@ pub fn decode_with_dict(src: &[u8], dict: &Dict) -> Result<Vec<u8>> {
 /// otherwise perform — that memset is the single largest cost on the
 /// decode path for small/medium blocks (≈ 80 % of cycles).
 ///
+/// Uses `try_reserve_exact` so that an attacker-supplied length header
+/// claiming a gigabyte-sized output returns [`Error::TooLarge`] instead
+/// of aborting the process with OOM. (libFuzzer caught a 6-byte
+/// adversarial input whose varint header claimed ~4 GiB; the format
+/// permits up to 4 GiB legitimately, so we don't reject by size — we
+/// just refuse to crash when the allocator can't satisfy the request.)
+///
 /// If the decoder returns Err, the partially-uninitialized Vec is dropped;
 /// that is safe because `u8` has no Drop and no code path reads from the
 /// uninit prefix.
 #[inline]
-fn alloc_uninit_dst(n: usize) -> Vec<u8> {
-    let mut v: Vec<u8> = Vec::with_capacity(n);
-    // SAFETY: capacity is exactly `n`, so the spare region covers 0..n.
-    // The decoder fully initializes 0..n before any read (see contract
-    // above); writes via copy_from_slice / copy_within over an uninit
-    // `&mut [u8]` are sound — no read of uninit bytes ever occurs.
+fn alloc_uninit_dst(n: usize) -> Result<Vec<u8>> {
+    let mut v: Vec<u8> = Vec::new();
+    v.try_reserve_exact(n).map_err(|_| Error::TooLarge)?;
+    // SAFETY: capacity is now ≥ `n`. The decoder fully initializes
+    // 0..n before any read (see contract above); writes via
+    // copy_from_slice / copy_within over an uninit `&mut [u8]` are
+    // sound — no read of uninit bytes ever occurs.
     #[allow(clippy::uninit_vec)]
     unsafe {
         v.set_len(n);
     }
-    v
+    Ok(v)
 }
 
 /// Decode into a pre-allocated destination buffer.

@@ -1667,3 +1667,35 @@ fn test_encode_zero_runs_roundtrip() {
         assert_eq!(*src, decode(&b).unwrap().as_slice(), "encode_best case {i}");
     }
 }
+
+/// Regression test for an adversarial-varint OOM caught by libFuzzer.
+///
+/// The 6-byte input below has a varint header that decodes to
+/// 0xeffd5b3ff ≈ 4 025 860 095, i.e. nearly 4 GiB. Before the fix,
+/// `decode()` called `Vec::with_capacity(4_025_860_095)` which
+/// asked the allocator for ~4 GiB and **aborted the process** when
+/// the request couldn't be satisfied (e.g. libFuzzer's default
+/// 2 GiB rss limit).
+///
+/// The fix is to allocate via `try_reserve_exact` so the function
+/// returns `Err` instead of crashing. The exact error variant
+/// depends on the host:
+/// - On a small-memory host (CI fuzz runner, container) the
+///   allocator refuses → `Err(TooLarge)`.
+/// - On a roomy host (32 GiB dev machine) the allocator happily
+///   maps 4 GiB; the subsequent s2_decode pass sees only 0 bytes
+///   of payload and reports `Err(Corrupt)`.
+///
+/// Both outcomes are acceptable; what's NOT acceptable is panic /
+/// abort / returning `Ok`.
+#[test]
+fn test_decode_oom_input_never_aborts() {
+    use crate::decode;
+    let adversarial: &[u8] = &[0xff, 0xff, 0xd6, 0xff, 0x8e, 0x00];
+    let result = decode(adversarial);
+    assert!(
+        result.is_err(),
+        "decode of adversarial 4 GiB varint must return Err (got Ok), \
+         and must not panic/abort"
+    );
+}
