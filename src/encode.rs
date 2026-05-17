@@ -24,11 +24,31 @@ impl Default for Encoder {
     }
 }
 
+/// Allocate a `Vec<u8>` of length `n` whose bytes are *uninitialized*.
+///
+/// All encoders write the destination buffer strictly in increasing order
+/// (varint header, then literals/copies via emit_*) and never read from
+/// it before writing. We can therefore skip the calloc zero-fill that
+/// `vec![0u8; n]` would otherwise perform — that memset is a noticeable
+/// share of small-block encode cost.
+#[inline]
+fn alloc_uninit_dst(n: usize) -> Vec<u8> {
+    let mut v: Vec<u8> = Vec::with_capacity(n);
+    // SAFETY: capacity is exactly `n`. Every byte written by the encoders
+    // is written before any read. The final `truncate(d + n)` leaves only
+    // initialized bytes visible; the uninit tail stays in spare capacity.
+    #[allow(clippy::uninit_vec)]
+    unsafe {
+        v.set_len(n);
+    }
+    v
+}
+
 /// Encode returns the encoded form of src.
 /// The encoding is compatible with the Go s2 implementation.
 pub fn encode(src: &[u8]) -> Vec<u8> {
     let max_len = max_encoded_len(src.len()).expect("source too large");
-    let mut dst = vec![0u8; max_len];
+    let mut dst = alloc_uninit_dst(max_len);
 
     // Write the varint-encoded length of the decompressed bytes
     let d = encode_varint(&mut dst, src.len() as u64);
@@ -59,7 +79,7 @@ pub fn encode(src: &[u8]) -> Vec<u8> {
 /// EncodeBetter provides better compression than Encode but is slower
 pub fn encode_better(src: &[u8]) -> Vec<u8> {
     let max_len = max_encoded_len(src.len()).expect("source too large");
-    let mut dst = vec![0u8; max_len];
+    let mut dst = alloc_uninit_dst(max_len);
 
     // Write the varint-encoded length of the decompressed bytes
     let d = encode_varint(&mut dst, src.len() as u64);
@@ -94,7 +114,7 @@ pub fn encode_better(src: &[u8]) -> Vec<u8> {
 /// against common patterns that appear in the dictionary.
 pub fn encode_with_dict(src: &[u8], dict: &Dict) -> Vec<u8> {
     let max_len = max_encoded_len(src.len()).expect("source too large");
-    let mut dst = vec![0u8; max_len];
+    let mut dst = alloc_uninit_dst(max_len);
 
     // Write the varint-encoded length of the decompressed bytes
     let d = encode_varint(&mut dst, src.len() as u64);
@@ -147,7 +167,7 @@ pub fn encode_best_with_dict(src: &[u8], _dict: &Dict) -> Vec<u8> {
 /// The encoding is less efficient than S2 as it doesn't use repeat offsets.
 pub fn encode_snappy(src: &[u8]) -> Vec<u8> {
     let max_len = max_encoded_len(src.len()).expect("source too large");
-    let mut dst = vec![0u8; max_len];
+    let mut dst = alloc_uninit_dst(max_len);
 
     // Write the varint-encoded length of the decompressed bytes
     let d = encode_varint(&mut dst, src.len() as u64);
@@ -178,7 +198,7 @@ pub fn encode_snappy(src: &[u8]) -> Vec<u8> {
 /// EncodeBest provides the best compression but is the slowest
 pub fn encode_best(src: &[u8]) -> Vec<u8> {
     let max_len = max_encoded_len(src.len()).expect("source too large");
-    let mut dst = vec![0u8; max_len];
+    let mut dst = alloc_uninit_dst(max_len);
 
     // Write the varint-encoded length of the decompressed bytes
     let d = encode_varint(&mut dst, src.len() as u64);
