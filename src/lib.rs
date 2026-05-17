@@ -39,7 +39,7 @@ mod writer;
 #[cfg(feature = "concurrent")]
 mod concurrent;
 
-pub use decode::{decode, decode_len, decode_snappy, decode_with_dict, Decoder};
+pub use decode::{decode, decode_into, decode_len, decode_snappy, decode_with_dict, Decoder};
 pub use dict::{
     make_dict, make_dict_manual, Dict, MAX_DICT_SIZE, MAX_DICT_SRC_OFFSET, MIN_DICT_SIZE,
 };

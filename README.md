@@ -5,16 +5,16 @@ A high-performance Rust implementation of the S2 compression format, providing b
 ## Features
 
 - **Binary Compatible**: Produces output 100% compatible with the Go S2 implementation
-- **High Performance**: 1.6-47x faster decoding than Go depending on data pattern
+- **High Performance**: 5–8× faster encoding and 60–270× faster decoding than the Go reference; see [BENCHMARKS.md](BENCHMARKS.md)
 - **Multiple Compression Levels**: Standard, Better, and Best modes
+- **Stateful Encoder**: `Encoder` struct that reuses hash-table buffers across calls for hot-loop workloads
 - **Stream Format**: Full Reader/Writer support with CRC32 validation
 - **Block Format**: Simple block-based compression for known-size data
 - **Command-Line Tools**: Full-featured `s2c` and `s2d` tools compatible with Go implementation
 - **Dictionary Compression**: Full support for dictionary-based compression
 - **Concurrent Compression**: Optional parallel compression with Rayon
 - **Index Support**: Seeking within compressed streams
-- **Pure Rust**: Written entirely in safe Rust with no unsafe code
-- **Well Tested**: 108 tests, fuzz testing, and property-based testing
+- **Mostly Safe Rust**: A few well-documented `unsafe` blocks in hot paths (uninitialised `Vec` allocation); covered by 86 unit, 10 proptest, and integration tests
 
 ## S2 Format
 
@@ -36,7 +36,7 @@ Add this to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-minlz = "0.1"
+minlz = "1"
 ```
 
 ### Optional Features
@@ -45,7 +45,7 @@ Enable concurrent compression for improved performance on multi-core systems:
 
 ```toml
 [dependencies]
-minlz = { version = "0.1", features = ["concurrent"] }
+minlz = { version = "1", features = ["concurrent"] }
 ```
 
 ## Usage
@@ -114,6 +114,29 @@ let compressed_better = encode_better(data);
 let compressed_best = encode_best(data);
 ```
 
+### Buffer Reuse with `Encoder`
+
+For hot loops compressing many small/medium blocks, the stateful
+`Encoder` keeps its internal hash tables across calls — eliminating
+the per-call allocation cost. Output is bit-for-bit identical to the
+corresponding free function.
+
+```rust
+use minlz::Encoder;
+
+let mut enc = Encoder::new();
+let mut outputs: Vec<Vec<u8>> = Vec::new();
+for chunk in inputs.chunks(4096) {
+    outputs.push(enc.encode(chunk));            // standard
+    // or enc.encode_better(chunk), enc.encode_best(chunk), enc.encode_snappy(chunk)
+}
+# let _ = outputs;
+# let inputs: &[u8] = b"";
+```
+
+Buffer reuse is up to **+30 %** on 1 KB `encode_better` and matches the
+free-function performance for larger inputs.
+
 ### Concurrent Compression (Optional Feature)
 
 Enable the `concurrent` feature for parallel compression on multi-core systems:
@@ -178,37 +201,38 @@ See [minlz-tools/README.md](minlz-tools/README.md) for complete documentation.
 
 ## Performance
 
-This Rust implementation delivers exceptional performance, often exceeding the Go reference implementation.
-
-### Benchmark Results (Intel i9-14900K)
+### Benchmark Results (Intel i9-14900K, rustc 1.95, target-cpu=native)
 
 #### Encoding Performance
 
-| Mode     | Data Size | Pattern    | Rust       | Go        | Speedup |
-|----------|-----------|------------|------------|-----------|---------|
-| Standard | 10KB      | Random     | 2.1 GiB/s  | 1280 MB/s | 1.7x    |
-| Standard | 100KB     | Text       | 2.2 GiB/s  | 1545 MB/s | 1.5x    |
-| Better   | 10KB      | Text       | 937 MiB/s  | 2232 MB/s | 0.4x    |
-| Best     | 10KB      | Repeated   | 85.1 MiB/s | 7 MB/s    | **12x** |
-| Best     | 10KB      | Text       | 111 MiB/s  | 7 MB/s    | **16x** |
+| Mode     | Data Size | Pattern    | Rust         | Go        | Speedup  |
+|----------|-----------|------------|--------------|-----------|----------|
+| Standard | 1KB       | Random     | 4.51 GiB/s   | 734 MB/s  | **6.5×** |
+| Standard | 10KB      | Random     | 8.13 GiB/s   | 1280 MB/s | **6.8×** |
+| Standard | 100KB     | Text       | 9.63 GiB/s   | 1545 MB/s | **6.7×** |
+| Better   | 10KB      | Repeated   | 10.91 GiB/s  | 1430 MB/s | **8.2×** |
+| Better   | 10KB      | Text       | 10.73 GiB/s  | 2232 MB/s | **5.2×** |
+| Best     | 10KB      | Repeated   | 106.9 MiB/s  | 7 MB/s    | **16×**  |
+| Best     | 10KB      | Text       | 109.6 MiB/s  | 7 MB/s    | **16×**  |
 
 #### Decoding Performance
 
-| Data Size | Pattern    | Rust       | Go        | Speedup  |
-|-----------|------------|------------|-----------|----------|
-| 1KB       | Random     | 17.7 GiB/s | 672 MB/s  | **28x**  |
-| 10KB      | Random     | 50.7 GiB/s | 538 MB/s  | **98x**  |
-| 10KB      | Text       | 8.3 GiB/s  | 509 MB/s  | **17x**  |
-| 100KB     | Random     | 37.2 GiB/s | 654 MB/s  | **59x**  |
-| 100KB     | Repeated   | 1.05 GiB/s | 685 MB/s  | 1.6x     |
+| Data Size | Pattern    | Rust         | Go        | Speedup   |
+|-----------|------------|--------------|-----------|-----------|
+| 1KB       | Random     | 40.5 GiB/s   | 672 MB/s  | **65×**   |
+| 10KB      | Random     | 110.2 GiB/s  | 538 MB/s  | **220×**  |
+| 10KB      | Repeated   | 134.9 GiB/s  | 537 MB/s  | **270×**  |
+| 10KB      | Text       | 94.1 GiB/s   | 509 MB/s  | **198×**  |
+| 100KB     | Random     | 70.1 GiB/s   | 654 MB/s  | **115×**  |
+| 100KB     | Repeated   | 79.5 GiB/s   | 685 MB/s  | **125×**  |
 
 **Key Takeaways:**
-- **Decode-heavy workloads**: Rust is 17-98x faster (random/text data)
-- **Best compression mode**: Binary compatible with Go's s2.EncodeBest, 12-16x faster
-- **Standard encoding**: Faster than Go across all patterns, 1.5-1.7x on larger data
-- **Better mode**: Go currently faster (area for future optimization)
+- **Decode-heavy workloads**: Rust is 59–270× faster.
+- **All encode modes**: Faster than Go on every measured case (5–8× standard/better, 16× best).
+- **Best mode**: Binary-identical output to Go's `s2.EncodeBest` for interop.
 
-See [BENCHMARKS.md](BENCHMARKS.md) for detailed performance analysis.
+See [BENCHMARKS.md](BENCHMARKS.md) for the full table, per-version
+changelog of optimisations, and reused-`Encoder` numbers.
 
 ## Binary Compatibility
 
@@ -285,14 +309,14 @@ This implementation includes comprehensive testing infrastructure:
 ### Run Tests
 
 ```bash
-# Unit and integration tests (48 tests)
+# Unit and integration tests
 cargo test
 
-# Property-based tests (proptest)
-cargo test --test proptest
+# Property-based tests (proptest) — stress with 2000 cases each
+PROPTEST_CASES=2000 cargo test --test proptest
 
 # Benchmarks
-cargo bench
+RUSTFLAGS="-C target-cpu=native" cargo bench
 
 # Fuzz testing
 cargo install cargo-fuzz
@@ -303,23 +327,15 @@ cargo fuzz run fuzz_stream
 
 ### Test Coverage
 
-- **81 Unit/Integration Tests**: Core functionality and edge cases
-- **10 Concurrent Tests**: Parallel compression validation
-- **10 Property-Based Tests**: Using proptest for randomized testing
-  - Roundtrip verification for all compression levels
-  - Stream format validation
-  - Compression ratio verification
-  - Decoder robustness (never panics on invalid input)
-  - Edge cases (empty data, small data, all-same-byte)
-  - Compression level compatibility
-- **3 Fuzz Targets**: Continuous fuzzing with libfuzzer
-  - Roundtrip fuzzing for all compression levels
-  - Decode fuzzing (arbitrary input)
-  - Stream format fuzzing
-- **4 Compatibility Tests**: Cross-validation with Go implementation
-- **Benchmark Suite**: Performance comparison with Go implementation
-
-**Total: 108 tests**
+- **86 unit tests** in `src/` — core functionality, edge cases, encoder regressions
+- **10 property-based tests** (`tests/proptest.rs`) — roundtrip for every
+  compression level, stream format, decoder robustness, empty/all-same-byte edges
+- **Go binary-compat integration tests** — `tests/go_compatibility.rs`,
+  `tests/better_compatibility.rs`, `tests/best_compatibility.rs`
+- **Snappy round-trip tests** — `tests/snappy_compat.rs`
+- **3 libfuzzer targets** — `fuzz_roundtrip`, `fuzz_decode`, `fuzz_stream`
+- **Concurrent compression tests** (with `concurrent` feature)
+- **Benchmark suite** — encode/decode/roundtrip + Encoder-reuse group
 
 ## License
 
@@ -340,4 +356,6 @@ Contributions are welcome! Please ensure:
 3. No clippy warnings (`cargo clippy`)
 4. Binary compatibility with Go implementation is maintained
 
-The current implementation passes all 108 tests, is formatted with rustfmt, and has zero clippy warnings.
+The current implementation passes all unit, integration, proptest, and
+compatibility tests, is formatted with rustfmt, and has zero clippy
+warnings under `-D warnings`.

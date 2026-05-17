@@ -91,8 +91,13 @@ fn alloc_uninit_dst(n: usize) -> Vec<u8> {
 }
 
 /// Decode into a pre-allocated destination buffer.
-/// Returns the number of bytes written to dst.
-#[allow(dead_code)]
+///
+/// `dst` must be at least `decode_len(src)?.0` bytes; otherwise
+/// returns [`Error::BufferTooSmall`]. The returned `usize` is the
+/// number of bytes written into `dst`.
+///
+/// Useful for hot loops that decode into a reusable buffer without
+/// allocating a fresh `Vec` per call.
 pub fn decode_into(dst: &mut [u8], src: &[u8]) -> Result<usize> {
     let (dlen, header_len) = decode_len(src)?;
 

@@ -6,7 +6,7 @@
 //! CRC32 checksum implementation for S2 streams
 //!
 //! This implements the checksum specified in section 3 of
-//! https://github.com/google/snappy/blob/master/framing_format.txt
+//! <https://github.com/google/snappy/blob/master/framing_format.txt>
 
 use crc::{Crc, CRC_32_ISCSI};
 
