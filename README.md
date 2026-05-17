@@ -1,6 +1,7 @@
 # minlz
 
 [![CI](https://github.com/KarpelesLab/minlz-rs/actions/workflows/ci.yml/badge.svg)](https://github.com/KarpelesLab/minlz-rs/actions/workflows/ci.yml)
+[![Fuzz](https://github.com/KarpelesLab/minlz-rs/actions/workflows/fuzz.yml/badge.svg)](https://github.com/KarpelesLab/minlz-rs/actions/workflows/fuzz.yml)
 [![Crates.io](https://img.shields.io/crates/v/minlz.svg)](https://crates.io/crates/minlz)
 [![Docs.rs](https://docs.rs/minlz/badge.svg)](https://docs.rs/minlz)
 [![License: BSD-3-Clause](https://img.shields.io/badge/license-BSD--3--Clause-blue.svg)](https://opensource.org/licenses/BSD-3-Clause)

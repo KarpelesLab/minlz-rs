@@ -1,0 +1,72 @@
+name: Fuzz
+
+on:
+  push:
+    branches: [ master, main ]
+  pull_request:
+    branches: [ master, main ]
+  schedule:
+    # 04:11 UTC daily — off-peak, off-the-half-hour
+    - cron: '11 4 * * *'
+
+env:
+  CARGO_TERM_COLOR: always
+  # Belt-and-braces against the rare panic the fuzz harness uncovers.
+  RUST_BACKTRACE: 1
+
+jobs:
+  fuzz:
+    name: Fuzz ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    strategy:
+      # Run all targets even if one finds a crash so we surface them all.
+      fail-fast: false
+      matrix:
+        target: [fuzz_roundtrip, fuzz_decode, fuzz_stream]
+    # Smoke on every push (60 s), long pass on the nightly cron (300 s).
+    env:
+      DURATION: ${{ github.event_name == 'schedule' && 300 || 60 }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Install Rust (nightly — cargo-fuzz requires it)
+        uses: dtolnay/rust-toolchain@nightly
+
+      - name: Cache cargo-fuzz binary
+        id: cache-cargo-fuzz
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/cargo-fuzz
+          key: cargo-fuzz-bin-v1
+
+      - name: Install cargo-fuzz
+        if: steps.cache-cargo-fuzz.outputs.cache-hit != 'true'
+        run: cargo install cargo-fuzz
+
+      - name: Cache fuzz corpus
+        # Persisting the corpus across runs lets the fuzzer build on inputs
+        # discovered previously instead of starting from scratch every time.
+        uses: actions/cache@v4
+        with:
+          path: fuzz/corpus
+          key: fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}
+          restore-keys: |
+            fuzz-corpus-${{ matrix.target }}-
+
+      - name: Run ${{ matrix.target }} for ${DURATION}s
+        run: |
+          cd fuzz
+          cargo fuzz run ${{ matrix.target }} -- \
+            -max_total_time=$DURATION \
+            -timeout=15
+
+      - name: Upload crash artifacts (if any)
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: fuzz-crashes-${{ matrix.target }}-${{ github.run_id }}
+          path: |
+            fuzz/artifacts/${{ matrix.target }}/
+          if-no-files-found: ignore
+          retention-days: 30
