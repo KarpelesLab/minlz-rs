@@ -64,8 +64,12 @@ fresh hash table on each call.
 | 100KB     | Repeated   | N/A       | 704          | 738         | -        |
 | 100KB     | Text       | N/A       | 1040         | 1090        | -        |
 
-`encode_best` output is bit-for-bit identical to Go's `s2.EncodeBest`
-on every test input.
+All three encode modes (`encode`, `encode_better`, `encode_best`)
+produce byte-for-byte identical output to Go's corresponding encoder
+functions on every test input — verified by `tests/go_compatibility.rs`
+(standard), `tests/better_compatibility.rs` (better), and
+`tests/best_compatibility.rs` (best). The Snappy mode is similarly
+compatible with the original Snappy decoder.
 
 ## Encoding Performance — `Encoder` (buffer reuse)
 
@@ -162,8 +166,8 @@ Cumulative vs. the original 0.1.3 baseline this whole effort started from:
 1. **Decode**: 59–270× faster than Go across every pattern.
 2. **Standard encode**: 6–8× faster than Go everywhere.
 3. **Better encode**: 5–8× faster than Go where Go numbers exist.
-4. **Best encode**: 16× faster than Go for medium inputs, with
-   byte-identical output for interop.
+4. **Best encode**: 16× faster than Go for medium inputs.
+5. **Byte-identical output for all encode modes** — see compat tests.
 
 ### Remaining opportunities (post-1.0)
 1. **Generation-based eviction in `Encoder::encode_best`**: the 4.5 MiB

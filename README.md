@@ -229,14 +229,30 @@ See [minlz-tools/README.md](minlz-tools/README.md) for complete documentation.
 **Key Takeaways:**
 - **Decode-heavy workloads**: Rust is 59–270× faster.
 - **All encode modes**: Faster than Go on every measured case (5–8× standard/better, 16× best).
-- **Best mode**: Binary-identical output to Go's `s2.EncodeBest` for interop.
+- **Binary-identical encoder output**: `encode`, `encode_better`, and
+  `encode_best` all produce byte-for-byte identical output to Go's
+  `s2.Encode`, `s2.EncodeBetter`, and `s2.EncodeBest`. Verified by
+  dedicated compat tests (`tests/go_compatibility.rs`,
+  `tests/better_compatibility.rs`, `tests/best_compatibility.rs`).
 
 See [BENCHMARKS.md](BENCHMARKS.md) for the full table, per-version
 changelog of optimisations, and reused-`Encoder` numbers.
 
 ## Binary Compatibility
 
-This implementation is binary compatible with the Go version. You can compress data with this Rust library and decompress it with the Go library, and vice versa.
+This implementation is binary compatible with the Go version in both
+directions:
+
+- **Decode**: any S2 (or Snappy) stream produced by Go is accepted
+  byte-for-byte.
+- **Encode**: every encode mode (`encode`, `encode_better`,
+  `encode_best`, `encode_snappy`) produces byte-for-byte identical
+  output to the corresponding Go function on the test inputs in
+  `tests/go_compatibility.rs`, `tests/better_compatibility.rs`,
+  `tests/best_compatibility.rs`, and `tests/snappy_compat.rs`.
+
+You can therefore compress data with this Rust library and
+decompress it with the Go library, and vice versa.
 
 ### Example: Interoperability with Go
 
