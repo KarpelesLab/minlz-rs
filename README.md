@@ -11,8 +11,8 @@ A high-performance Rust implementation of the S2 compression format, providing b
 
 ## Features
 
-- **Binary Compatible**: Produces output 100% compatible with the Go S2 implementation
-- **High Performance**: 5–8× faster encoding and 60–270× faster decoding than the Go reference; see [BENCHMARKS.md](BENCHMARKS.md)
+- **Binary Compatible**: All four encode modes (`encode`, `encode_better`, `encode_best`, `encode_snappy`) produce byte-for-byte identical output to Go's `s2.Encode*` on every test input
+- **Decode-Heavy Performance**: 6–27× faster decode than Go's AMD64 assembly path on the same machine, peaking at ~135 GiB/s on L1-resident blocks; see [BENCHMARKS.md](BENCHMARKS.md) for the full apples-to-apples table
 - **Multiple Compression Levels**: Standard, Better, and Best modes
 - **Stateful Encoder**: `Encoder` struct that reuses hash-table buffers across calls for hot-loop workloads
 - **Stream Format**: Full Reader/Writer support with CRC32 validation
@@ -21,7 +21,7 @@ A high-performance Rust implementation of the S2 compression format, providing b
 - **Dictionary Compression**: Full support for dictionary-based compression
 - **Concurrent Compression**: Optional parallel compression with Rayon
 - **Index Support**: Seeking within compressed streams
-- **Mostly Safe Rust**: A few well-documented `unsafe` blocks in hot paths (uninitialised `Vec` allocation); covered by 86 unit, 10 proptest, and integration tests
+- **Mostly Safe Rust**: A few well-documented `unsafe` blocks in hot paths (uninitialised `Vec` allocation); covered by unit, property-based, libfuzzer, and Go-binary-compat tests
 
 ## S2 Format
 
@@ -208,39 +208,55 @@ See [minlz-tools/README.md](minlz-tools/README.md) for complete documentation.
 
 ## Performance
 
-### Benchmark Results (Intel i9-14900K, rustc 1.95, target-cpu=native)
+All numbers below are **single-thread** throughput on Intel Core
+i9-14900K with `RUSTFLAGS="-C target-cpu=native"` for Rust and
+`GOAMD64=v3` (AVX2 enabled) for Go 1.25. Both columns measured on
+the same machine with identical input generators — see
+[BENCHMARKS.md](BENCHMARKS.md) for the full table, methodology, and
+per-version changelog.
 
-#### Encoding Performance
+#### Decode (Rust dominates)
 
-| Mode     | Data Size | Pattern    | Rust         | Go        | Speedup  |
-|----------|-----------|------------|--------------|-----------|----------|
-| Standard | 1KB       | Random     | 4.51 GiB/s   | 734 MB/s  | **6.5×** |
-| Standard | 10KB      | Random     | 8.13 GiB/s   | 1280 MB/s | **6.8×** |
-| Standard | 100KB     | Text       | 9.63 GiB/s   | 1545 MB/s | **6.7×** |
-| Better   | 10KB      | Repeated   | 10.91 GiB/s  | 1430 MB/s | **8.2×** |
-| Better   | 10KB      | Text       | 10.73 GiB/s  | 2232 MB/s | **5.2×** |
-| Best     | 10KB      | Repeated   | 106.9 MiB/s  | 7 MB/s    | **16×**  |
-| Best     | 10KB      | Text       | 109.6 MiB/s  | 7 MB/s    | **16×**  |
-
-#### Decoding Performance
-
-| Data Size | Pattern    | Rust         | Go        | Speedup   |
+| Data Size | Pattern    | Rust         | Go (s2)   | Rust / Go |
 |-----------|------------|--------------|-----------|-----------|
-| 1KB       | Random     | 40.5 GiB/s   | 672 MB/s  | **65×**   |
-| 10KB      | Random     | 110.2 GiB/s  | 538 MB/s  | **220×**  |
-| 10KB      | Repeated   | 134.9 GiB/s  | 537 MB/s  | **270×**  |
-| 10KB      | Text       | 94.1 GiB/s   | 509 MB/s  | **198×**  |
-| 100KB     | Random     | 70.1 GiB/s   | 654 MB/s  | **115×**  |
-| 100KB     | Repeated   | 79.5 GiB/s   | 685 MB/s  | **125×**  |
+| 1 KB      | Random     | 38.1 GiB/s   | 6.4 GB/s  | **6.4×**  |
+| 10 KB     | Random     | 103.6 GiB/s  | 5.3 GB/s  | **21×**   |
+| 10 KB     | Repeated   | 134.8 GiB/s  | 5.4 GB/s  | **27×**   |
+| 10 KB     | Text       | 91.4 GiB/s   | 5.3 GB/s  | **18×**   |
+| 100 KB    | Random     | 70.6 GiB/s   | 5.3 GB/s  | **14×**   |
 
-**Key Takeaways:**
-- **Decode-heavy workloads**: Rust is 59–270× faster.
-- **All encode modes**: Faster than Go on every measured case (5–8× standard/better, 16× best).
-- **Binary-identical encoder output**: `encode`, `encode_better`, and
-  `encode_best` all produce byte-for-byte identical output to Go's
-  `s2.Encode`, `s2.EncodeBetter`, and `s2.EncodeBest`. Verified by
-  dedicated compat tests (`tests/go_compatibility.rs`,
-  `tests/better_compatibility.rs`, `tests/best_compatibility.rs`).
+Peak: 135 GiB/s on L1-resident blocks. The 100 KB cases are DRAM-
+bandwidth-bound at 70+ GiB/s.
+
+#### Encode (Go wins standard, tied elsewhere)
+
+| Mode     | Data Size | Pattern  | Rust          | Go (s2)    | Rust / Go |
+|----------|-----------|----------|---------------|------------|-----------|
+| Standard | 10 KB     | Random   |  8.2 GiB/s    | 23.1 GiB/s | 0.36×     |
+| Standard | 100 KB    | Text     |  8.4 GiB/s    | 30.6 GiB/s | 0.27×     |
+| Better   | 10 KB     | Text     | 10.9 GiB/s    |  7.3 GiB/s | **1.49×** |
+| Better   | 100 KB    | Text     |  8.0 GiB/s    | 10.0 GiB/s | 0.80×     |
+| Best     | 10 KB     | Text     | 109 MiB/s     | 116 MiB/s  | 0.94×     |
+| Best     | 100 KB    | Text     | 1031 MiB/s    | 1038 MiB/s | 0.99×     |
+
+**Honest summary** (against an *apples-to-apples* single-thread Go
+run on the same i9-14900K, not the parallel-16-core aggregate the
+Go README publishes):
+
+- **Decode**: minlz is 6–27× faster than Go.
+- **Standard encode**: Go is 2–4× faster — its hand-tuned AMD64
+  assembly inner loop is hard to beat from pure Rust.
+- **Better encode**: roughly tied, minlz wins ~10 KB, Go wins
+  ~100 KB.
+- **Best encode**: essentially identical (both bottleneck on the
+  multi-candidate scoring algorithm rather than the inner loop).
+- **Encoder output is byte-for-byte identical to Go** across all
+  four modes (verified by compat tests).
+
+If decode throughput is your priority — caching, log decompression,
+streaming reads — minlz wins decisively. If you encode large blobs
+in the standard "fast" mode and never decode in-process,
+klauspost/compress/s2 is currently faster on that specific path.
 
 See [BENCHMARKS.md](BENCHMARKS.md) for the full table, per-version
 changelog of optimisations, and reused-`Encoder` numbers.

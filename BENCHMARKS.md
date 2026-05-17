@@ -1,182 +1,194 @@
 # Performance Benchmarks: Rust vs Go S2 Implementation
 
 This document records the performance of the Rust implementation (`minlz`)
-and compares it to the Go reference (`github.com/klauspost/compress/s2`)
-where comparable numbers are available.
+against the Go reference (`github.com/klauspost/compress/s2`, v1.18.6).
+Both columns were measured on the **same machine** with single-threaded
+benchmarks using identical input patterns and sizes.
 
 ## Test Environment
 
 - CPU: Intel Core i9-14900K
 - OS: Linux 6.12.41-gentoo
-- Rust: minlz 1.0 (rustc 1.95.0)
-- Build: `RUSTFLAGS="-C target-cpu=native" cargo bench --bench compression`
-- Harness: criterion 0.5 (100 samples / bench, 3 s warmup)
+- Rust: minlz 1.0.x (rustc 1.95.0), `RUSTFLAGS="-C target-cpu=native"`
+- Go: 1.25.3, `GOAMD64=v3` (enables AVX2)
+- Harness: criterion 0.5 for Rust (100 samples / bench, 3 s warmup);
+  `go test -bench -benchtime=2s -cpu=1` for Go
+- Inputs are generated identically in both harnesses (see
+  `benches/compression.rs` and `bench_test.go`).
 
-Go numbers below are carried over from the original report
-(klauspost/compress/s2, same CPU class) for historical comparison —
-only the Rust column has been re-measured.
+**Note**: The often-quoted ~50 GB/s figure in the Go README is the
+**parallel 16-core aggregate**. Per-core throughput (what matters for
+a like-for-like comparison) is roughly 1/16 of that.
 
-## Encoding Performance — free functions
+## Encoding Performance
 
-These numbers reflect the canonical `encode`, `encode_better`,
-`encode_best`, and `encode_snappy` free functions, which allocate a
-fresh hash table on each call.
+Throughput in MB/s (decimal megabytes / second). Rust columns converted
+from MiB/s to MB/s using `× 1.048576`.
 
-### Standard (`encode`)
+### Standard (`encode` / `s2.Encode`)
 
-| Data Size | Pattern    | Go (MB/s) | Rust (MiB/s) | Rust (MB/s) | Winner   |
-|-----------|------------|-----------|--------------|-------------|----------|
-| 1KB       | Random     | 734       | 4514         | 4734        | Rust 6.5×|
-| 1KB       | Repeated   | 997       | 6160         | 6459        | Rust 6.5×|
-| 1KB       | Text       | 887       | 5301         | 5559        | Rust 6.3×|
-| 1KB       | Sequential | 739       | 4290         | 4499        | Rust 6.1×|
-| 10KB      | Random     | 1280      | 8330         | 8736        | Rust 6.8×|
-| 10KB      | Repeated   | 1199      | 8851         | 9282        | Rust 7.7×|
-| 10KB      | Text       | 1312      | 8967         | 9402        | Rust 7.2×|
-| 10KB      | Sequential | 1291      | 8405         | 8814        | Rust 6.8×|
-| 100KB     | Random     | 1570      | 9460         | 9920        | Rust 6.3×|
-| 100KB     | Repeated   | 1292      | 10017        | 10503       | Rust 8.1×|
-| 100KB     | Text       | 1545      | 9863         | 10342       | Rust 6.7×|
-| 100KB     | Sequential | 1231      | 9509         | 9971        | Rust 8.1×|
+Go uses hand-written AMD64 assembly with explicit SIMD for the
+match-search inner loop; minlz is pure Rust relying on LLVM
+autovectorization.
 
-### Better (`encode_better`)
+| Data Size | Pattern    | Rust (MB/s) | Go (MB/s) | Rust / Go |
+|-----------|------------|-------------|-----------|-----------|
+| 1 KB      | Random     | 4720        | 6502      | 0.73×     |
+| 1 KB      | Repeated   | 6115        | 13308     | 0.46×     |
+| 1 KB      | Text       | 5811        | 10105     | 0.58×     |
+| 1 KB      | Sequential | 4401        | 6367      | 0.69×     |
+| 10 KB     | Random     | 8839        | 24851     | 0.36×     |
+| 10 KB     | Repeated   | 9468        | 28785     | 0.33×     |
+| 10 KB     | Text       | 9139        | 27667     | 0.33×     |
+| 10 KB     | Sequential | 6221        | 24311     | 0.26×     |
+| 100 KB    | Random     | 9498        | 33225     | 0.29×     |
+| 100 KB    | Repeated   | 9013        | 32433     | 0.28×     |
+| 100 KB    | Text       | 8994        | 32837     | 0.27×     |
+| 100 KB    | Sequential | 9665        | 32444     | 0.30×     |
 
-| Data Size | Pattern    | Go (MB/s) | Rust (MiB/s) | Rust (MB/s) | Winner   |
-|-----------|------------|-----------|--------------|-------------|----------|
-| 1KB       | Random     | N/A       | 3331         | 3492        | -        |
-| 1KB       | Repeated   | N/A       | 5117         | 5366        | -        |
-| 1KB       | Text       | N/A       | 4019         | 4214        | -        |
-| 10KB      | Random     | N/A       | 11095        | 11633       | -        |
-| 10KB      | Repeated   | 1430      | 11173        | 11716       | Rust 8.2×|
-| 10KB      | Text       | 2232      | 10987        | 11521       | Rust 5.2×|
-| 100KB     | Random     | N/A       | 8503         | 8916        | -        |
-| 100KB     | Repeated   | N/A       | 8819         | 9248        | -        |
-| 100KB     | Text       | N/A       | 8542         | 8957        | -        |
+Go's AVX2 literal-emit and table lookups beat us by 2–4× on this
+mode. This is the cleanest place for future SIMD work in `minlz`.
 
-### Best (`encode_best`)
+### Better (`encode_better` / `s2.EncodeBetter`)
 
-| Data Size | Pattern    | Go (MB/s) | Rust (MiB/s) | Rust (MB/s) | Winner   |
-|-----------|------------|-----------|--------------|-------------|----------|
-| 1KB       | Repeated   | N/A       | 11.2         | 11.7        | -        |
-| 1KB       | Text       | N/A       | 11.3         | 11.8        | -        |
-| 10KB      | Repeated   | 7.04      | 106.9        | 112.1       | Rust 16× |
-| 10KB      | Text       | 7.15      | 109.6        | 114.9       | Rust 16× |
-| 100KB     | Repeated   | N/A       | 704          | 738         | -        |
-| 100KB     | Text       | N/A       | 1040         | 1090        | -        |
+| Data Size | Pattern   | Rust (MB/s) | Go (MB/s) | Rust / Go |
+|-----------|-----------|-------------|-----------|-----------|
+| 1 KB      | Random    | 3367        | 3547      | 0.95×     |
+| 1 KB      | Repeated  | 5622        | 6049      | 0.93×     |
+| 1 KB      | Text      | 4144        | 4328      | 0.96×     |
+| 10 KB     | Random    | 11272       | 7259      | **1.55×** |
+| 10 KB     | Repeated  | 11121       | 8212      | **1.35×** |
+| 10 KB     | Text      | 11651       | 7813      | **1.49×** |
+| 100 KB    | Random    | 8589        | 10508     | 0.82×     |
+| 100 KB    | Repeated  | 8932        | 10649     | 0.84×     |
+| 100 KB    | Text      | 8631        | 10791     | 0.80×     |
 
-All three encode modes (`encode`, `encode_better`, `encode_best`)
-produce byte-for-byte identical output to Go's corresponding encoder
-functions on every test input — verified by `tests/go_compatibility.rs`
-(standard), `tests/better_compatibility.rs` (better), and
-`tests/best_compatibility.rs` (best). The Snappy mode is similarly
-compatible with the original Snappy decoder.
+Mixed picture: minlz wins decisively in the L1/L2-resident 10 KB
+range, Go wins on 100 KB inputs (memory bandwidth + assembly), and
+they're effectively tied at 1 KB.
 
-## Encoding Performance — `Encoder` (buffer reuse)
+### Best (`encode_best` / `s2.EncodeBest`)
 
-The stateful `Encoder` keeps its hash tables across calls. The numbers
-below are for `b.iter(|| enc.encode_*(data))` — i.e. each iteration
-reuses the buffers warmed up on the previous one.
+| Data Size | Pattern  | Rust (MB/s) | Go (MB/s) | Rust / Go |
+|-----------|----------|-------------|-----------|-----------|
+| 1 KB      | Repeated | 10.9        | 11.9      | 0.91×     |
+| 1 KB      | Text     | 10.9        | 11.7      | 0.93×     |
+| 10 KB     | Repeated | 105         | 112       | 0.94×     |
+| 10 KB     | Text     | 109         | 116       | 0.94×     |
+| 100 KB    | Repeated | 686         | 686       | 1.00×     |
+| 100 KB    | Text     | 1031        | 1038      | 0.99×     |
 
-| Mode     | Data Size | Pattern  | Free fn      | Encoder       | Δ     |
-|----------|-----------|----------|--------------|---------------|-------|
-| Standard | 1024      | Random   | 4.51 GiB/s   | 4.58 GiB/s    |  +2%  |
-| Standard | 1024      | Text     | 5.18 GiB/s   | 5.83 GiB/s    | +13%  |
-| Standard | 10240     | Random   | 8.13 GiB/s   | 8.27 GiB/s    |  +2%  |
-| Standard | 10240     | Text     | 8.76 GiB/s   | 8.52 GiB/s    |  flat |
-| Standard | 102400    | Random   | 9.24 GiB/s   | 8.97 GiB/s    |  flat |
-| Standard | 102400    | Text     | 9.63 GiB/s   | 9.63 GiB/s    |  flat |
-| Better   | 1024      | Random   | 3.25 GiB/s   | 4.08 GiB/s    | +25%  |
-| Better   | 1024      | Text     | 3.93 GiB/s   | 5.20 GiB/s    | +32%  |
-| Better   | 10240     | Random   | 10.84 GiB/s  | 11.53 GiB/s   |  +6%  |
-| Better   | 10240     | Text     | 10.73 GiB/s  | 11.15 GiB/s   |  +4%  |
-| Better   | 102400    | Random   | 8.30 GiB/s   | 8.30 GiB/s    |  flat |
-| Better   | 102400    | Text     | 8.34 GiB/s   | 8.45 GiB/s    |  +1%  |
-| Best     | 1024      | Repeated | 11.2 MiB/s   | 11.3 MiB/s    |  flat |
-| Best     | 1024      | Text     | 11.3 MiB/s   | 11.1 MiB/s    |  flat |
-| Best     | 10240     | Repeated | 106.9 MiB/s  | 105.8 MiB/s   |  flat |
-| Best     | 10240     | Text     | 109.6 MiB/s  | 111.2 MiB/s   |  +1%  |
-| Best     | 102400    | Text     | 1040 MiB/s   | 1010 MiB/s    |  flat |
-
-The reuse win is biggest on 1 KB `encode_better` (where the small-table
-memset and per-call alloc together dominate). `encode_best` doesn't
-benefit much from `Encoder` because its 4.5 MiB hash table still gets
-zero-filled every call — the alloc cost is small relative to the
-memset itself.
+Essentially tied. Both implementations run the same multi-candidate
+scoring algorithm; the work is bottlenecked by the algorithm itself,
+not the inner loop. Output is byte-for-byte identical to Go.
 
 ## Decoding Performance
 
-| Data Size | Pattern    | Go (MB/s) | Rust (GiB/s) | Rust (MB/s) | Speedup vs Go |
-|-----------|------------|-----------|--------------|-------------|---------------|
-| 1KB       | Random     | 672       | 40.5         | 43439       | 65x           |
-| 1KB       | Repeated   | 547       | 46.9         | 50311       | 92x           |
-| 1KB       | Text       | 560       | 30.8         | 33041       | 59x           |
-| 1KB       | Sequential | N/A       | 41.7         | 44724       | N/A           |
-| 10KB      | Random     | 538       | 110.2        | 118353      | 220x          |
-| 10KB      | Repeated   | 537       | 134.9        | 144831      | 270x          |
-| 10KB      | Text       | 509       | 94.1         | 101010      | 198x          |
-| 10KB      | Sequential | N/A       | 109.2        | 117278      | N/A           |
-| 100KB     | Random     | 654       | 70.1         | 75252       | 115x          |
-| 100KB     | Repeated   | 685       | 79.5         | 85419       | 125x          |
-| 100KB     | Text       | 627       | 69.9         | 75064       | 120x          |
-| 100KB     | Sequential | N/A       | 71.3         | 76544       | N/A           |
+| Data Size | Pattern    | Rust (GiB/s) | Rust (MB/s) | Go (MB/s) | Rust / Go |
+|-----------|------------|--------------|-------------|-----------|-----------|
+| 1 KB      | Random     |  38.1        | 40950       | 6360      | **6.4×**  |
+| 1 KB      | Repeated   |  43.4        | 46638       | 4874      | **9.6×**  |
+| 1 KB      | Text       |  29.7        | 31921       | 5075      | **6.3×**  |
+| 1 KB      | Sequential |  38.7        | 41560       | 6016      | **6.9×**  |
+| 10 KB     | Random     | 103.6        | 111301      | 5279      | **21.1×** |
+| 10 KB     | Repeated   | 134.8        | 144800      | 5375      | **26.9×** |
+| 10 KB     | Text       |  91.4        | 98135       | 5327      | **18.4×** |
+| 10 KB     | Sequential | 106.9        | 114774      | 4836      | **23.7×** |
+| 100 KB    | Random     |  70.6        | 75793       | 5308      | **14.3×** |
+| 100 KB    | Repeated   |  77.5        | 83257       | 5529      | **15.1×** |
+| 100 KB    | Text       |  68.3        | 73347       | 5390      | **13.6×** |
+| 100 KB    | Sequential |  71.4        | 76660       | 5221      | **14.7×** |
 
-10 KB cases sit in L1/L2 and approach memory bandwidth at 95–135 GiB/s.
-100 KB cases hit DRAM at 70–80 GiB/s.
+The decode side is where minlz pulls clearly ahead — Go's per-core
+decode tops out around 5–6 GB/s, while minlz peaks at 135 GiB/s on
+L1/L2-resident inputs and is memory-bandwidth-bound at 70+ GiB/s for
+DRAM-resident inputs. The improvements come from:
+- Skipping the `vec![0; n]` zero-fill of the destination buffer.
+- Replacing the byte-by-byte overlapping-copy loop with `slice::fill`
+  + memmove doubling.
+- Slice + `try_into` for the unaligned word loads.
 
-## Roundtrip Performance (Encode + Decode)
+## Roundtrip (Encode + Decode)
 
-| Data Size | Pattern  | Go (MB/s) | Rust (MiB/s) | Rust (MB/s) | Speedup vs Go |
-|-----------|----------|-----------|--------------|-------------|---------------|
-| 1KB       | Text     | 329       | 4314         | 4524        | 13.7x         |
-| 1KB       | Repeated | 294       | 5394         | 5658        | 19.2x         |
-| 10KB      | Text     | 354       | 8111         | 8504        | 24.0x         |
-| 10KB      | Repeated | 302       | 8215         | 8615        | 28.5x         |
+The roundtrip is mostly dominated by encode now:
 
-## What was optimized along the way to 1.0
+| Data Size | Pattern  | Rust (MiB/s) | Rust (MB/s) |
+|-----------|----------|--------------|-------------|
+| 1 KB      | Text     | 4209         | 4414        |
+| 1 KB      | Repeated | 5256         | 5512        |
+| 10 KB     | Text     | 7304         | 7657        |
+| 10 KB     | Repeated | 7584         | 7951        |
 
-| Release | Change | Headline win |
-|---------|--------|--------------|
-| 0.1.4   | Decoder: replace byte-by-byte loop in `copy_within` with `slice::fill` + doubling memmoves for overlapping copies. | `decode/repeated` 1 GiB/s → 40–99 GiB/s (40–99×) |
-| 0.1.4   | `encode_standard`: hash table sized to input (10/12/14/17 bits) instead of always 14. | 1 KB encode 870 MiB/s → 1.8 GiB/s |
-| 0.1.5   | **Correctness fix**: `encode_block` match-extension over-counted match length by `diff` after a partial-match break. Silent data corruption on ~95% of run-heavy inputs. | All affected inputs round-trip again |
-| 0.1.6   | `load32`/`load64` now use slice + `try_into` so LLVM emits a single unaligned word load instead of N byte loads. | 3–4× universal encoder speedup |
-| 0.1.6   | Decoder skips dst zero-fill via `Vec::with_capacity + set_len`; the decoder writes every byte before reading. | `decode/*/102400` 37 → 71 GiB/s (≈ 2×) |
-| 0.1.6   | All encoders also skip dst zero-fill. | +10–15 % on large encoder inputs |
-| 1.0     | Stateful `Encoder` API with reusable hash-table buffers; new `encode/encode_better/encode_best/encode_snappy` methods alongside the existing free functions. | +25–32 % on 1 KB `encode_better` |
-| 1.0     | `encode_snappy` got the same input-adaptive table sizing as `encode_standard`. | small-input Snappy now sized to fit |
-| 1.0     | `decode_into` made public for callers that bring their own buffer. | API completeness |
+## Encoder (buffer reuse)
 
-Cumulative vs. the original 0.1.3 baseline this whole effort started from:
+The stateful `Encoder` keeps its hash tables across calls. Reuse
+matters most on small inputs:
 
-| Bench                          | 0.1.3 baseline | 1.0          | Δ       |
-|--------------------------------|----------------|--------------|---------|
-| encode_standard/random/1024    |  848 MiB/s     | 4.51 GiB/s   | +446 %  |
-| encode_standard/repeated/102400| 2.13 GiB/s     | 9.78 GiB/s   | +359 %  |
-| encode_better/random/10240     | 2.08 GiB/s     | 10.84 GiB/s  | +421 %  |
-| encode_better/text/102400      | 2.01 GiB/s     | 8.34 GiB/s   | +315 %  |
-| encode_best/text/102400        |  849 MiB/s     | 1.02 GiB/s   |  +23 %  |
-| decode/repeated/10240          | 1.14 GiB/s     | 134.9 GiB/s  | +11600 %|
-| decode/repeated/102400         | 1.10 GiB/s     | 79.5 GiB/s   | +7124 % |
-| decode/text/102400             | 8.27 GiB/s     | 69.9 GiB/s   | +745 %  |
-| roundtrip/text/10240           | 1.74 GiB/s     | 7.92 GiB/s   | +355 %  |
+| Mode     | Size  | Pattern | Free fn      | Encoder     | Δ     |
+|----------|-------|---------|--------------|-------------|-------|
+| Standard | 1024  | Text    | 5.41 GiB/s   | 5.83 GiB/s  | +8%   |
+| Better   | 1024  | Random  | 3.14 GiB/s   | 4.09 GiB/s  | +30%  |
+| Better   | 1024  | Text    | 3.86 GiB/s   | 5.20 GiB/s  | +35%  |
+| Better   | 10240 | Random  | 10.50 GiB/s  | 11.53 GiB/s | +10%  |
+| Better   | 10240 | Text    | 10.85 GiB/s  | 11.15 GiB/s | +3%   |
+| Best     | 10240 | Text    | 109 MiB/s    | 111 MiB/s   | +2%   |
+
+`encode_best` doesn't benefit much from Encoder reuse because its
+4.5 MiB hash table is zero-filled on every call. Eliminating that
+memset (e.g. via a generation-based eviction scheme) is the main
+remaining lever for that mode.
 
 ## Summary
 
-### Where Rust wins (1.0)
-1. **Decode**: 59–270× faster than Go across every pattern.
-2. **Standard encode**: 6–8× faster than Go everywhere.
-3. **Better encode**: 5–8× faster than Go where Go numbers exist.
-4. **Best encode**: 16× faster than Go for medium inputs.
-5. **Byte-identical output for all encode modes** — see compat tests.
+### Where minlz beats Go
+- **Decode, every pattern, every size**: 6–27× faster. Peak 135 GiB/s
+  on L1-resident inputs, ~70 GiB/s on DRAM-resident.
+- **`encode_better` on 10 KB inputs**: 1.35–1.55× faster than Go's
+  AMD64 assembly path.
 
-### Remaining opportunities (post-1.0)
-1. **Generation-based eviction in `Encoder::encode_best`**: the 4.5 MiB
-   hash-table memset is still ~75 % of `encode_best` time on small
-   inputs. Tracking a per-call generation in a separate `Vec<u8>` would
-   eliminate it.
-2. **SIMD-assisted match extension**: the 8-byte XOR + trailing-zeros
-   loop already auto-vectorises well, but a hand-tuned AVX2 path could
-   double the match-extension throughput on long matches.
+### Where Go beats minlz
+- **`encode` (standard mode), all sizes**: Go is 2–4× faster, owing
+  almost entirely to its hand-tuned AVX2 inner loop. Future versions
+  of minlz could close this gap with explicit SIMD intrinsics or
+  inline assembly.
+- **`encode_better` on 100 KB inputs**: Go is ~20% faster.
+
+### Where they tie
+- **`encode_best`**: within ±10 % on every size/pattern combination.
+  Both implementations are bottlenecked by the multi-candidate
+  scoring algorithm rather than the inner loop. Output is
+  byte-for-byte identical for interop.
+
+## Binary compatibility
+
+Output of all four encode modes (`encode`, `encode_better`,
+`encode_best`, `encode_snappy`) is byte-for-byte identical to Go's
+corresponding functions on every test input — verified by
+`tests/go_compatibility.rs`, `tests/better_compatibility.rs`,
+`tests/best_compatibility.rs`, and `tests/snappy_compat.rs`.
+
+## What was optimized along the way
+
+| Release | Change | Headline effect |
+|---------|--------|-----------------|
+| 0.1.4   | Decoder: replace byte-by-byte overlapping copy with `slice::fill` + doubling memmoves | `decode/repeated` 1 GiB/s → 40–99 GiB/s |
+| 0.1.4   | Standard encoder: input-adaptive hash table size | 1 KB encode 0.87 → 1.8 GiB/s |
+| 0.1.5   | **Correctness fix**: encoder match-extension off-by-N (silent data corruption on ~95% of run-heavy inputs) | Bug closed; permanent regression test |
+| 0.1.6   | `load32`/`load64` use slice + `try_into` (single MOV instead of N indexed reads) | 3–4× universal encoder boost |
+| 0.1.6   | Decoder skips dst zero-fill via `Vec::with_capacity + set_len` | `decode/100 KB` 37 → 71 GiB/s |
+| 0.1.6   | All encoders also skip dst zero-fill | +10–15% on large encode inputs |
+| 1.0     | Stateful `Encoder` API with reusable hash-table buffers; same trick applied to Snappy | +30% on 1 KB `encode_better` |
+| 1.0.1   | `try_reserve_exact` in decoder dst alloc (fuzz-caught OOM) | Decoder cannot abort process on adversarial input |
+| 1.0.2   | Hard cap `MAX_DECODE_DST_SIZE = 256 MiB` (second fuzz-caught OOM) | Decoder returns `Err(TooLarge)` instead of `OOM` |
+
+## Remaining opportunities
+
+1. **SIMD-assisted standard encoder**: the 2–4× gap to Go on
+   `encode` is almost entirely the AMD64 assembly inner loop. Hand-
+   written `std::arch` intrinsics for x86-64 with a portable
+   scalar fallback would close most of it.
+2. **Generation-based eviction in `Encoder::encode_best`**: the
+   4.5 MiB hash-table memset still dominates small-input cost.
 3. **Dictionary-aware better/best modes**: `encode_better_with_dict`
    and `encode_best_with_dict` currently fall through to their
    non-dict counterparts.
