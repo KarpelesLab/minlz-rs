@@ -608,18 +608,33 @@ fn decode_copy1(src: &[u8], last_offset: usize) -> Result<(usize, usize, usize)>
 
 /// Copy data within the same buffer, handling overlapping regions correctly.
 /// This mimics the behavior of the Go implementation where overlapping copies
-/// repeat the pattern.
+/// repeat the pattern (RLE-style).
 #[inline]
 fn copy_within(dst: &mut [u8], d: usize, offset: usize, length: usize) {
     let src_start = d - offset;
 
-    // If no overlap, use the fast built-in copy
+    // Non-overlapping: one memmove.
     if offset >= length {
         dst.copy_within(src_start..src_start + length, d);
-    } else {
-        // Overlapping copy - must be done byte by byte to get the repeating pattern
-        for i in 0..length {
-            dst[d + i] = dst[src_start + i];
-        }
+        return;
+    }
+
+    // RLE case: offset == 1 is just a byte fill.
+    if offset == 1 {
+        let b = dst[src_start];
+        dst[d..d + length].fill(b);
+        return;
+    }
+
+    // Overlapping pattern fill (offset < length, offset > 1).
+    // After each round we have at least `2 * available` valid bytes, so this
+    // runs in O(log length) calls to copy_within — each of which can use the
+    // built-in memmove and SIMD.
+    let mut written = 0;
+    while written < length {
+        let available = offset + written;
+        let chunk = (length - written).min(available);
+        dst.copy_within(src_start..src_start + chunk, d + written);
+        written += chunk;
     }
 }
