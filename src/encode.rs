@@ -691,6 +691,16 @@ fn hash8(u: u64, h: u8) -> u32 {
     ((u.wrapping_mul(PRIME_8_BYTES)) >> ((64 - h) & 63)) as u32
 }
 
+/// 4-byte Knuth/Fibonacci hash, matching the inline hash used by
+/// klauspost/compress/s2's `encodeBlockAsm10B` (and `…8B`).
+/// `(u << 32) * 0x9e3779b1 >> ((64 - h) & 63)` in u64; equivalently
+/// `(u32_val * 0x9e3779b1) >> (32 - h)` in u32. Use the latter form so
+/// it compiles to one IMUL + one SHR.
+#[inline(always)]
+fn hash4_asm(val: u32, h: u32) -> usize {
+    (val.wrapping_mul(0x9e3779b1) >> (32 - h)) as usize
+}
+
 /// Load a u32 from the slice at the given offset.
 /// Reading the bytes through a single slice + try_into lets LLVM elide
 /// the per-byte bounds checks and emit one unaligned 4-byte load.
@@ -717,6 +727,12 @@ fn load64(data: &[u8], offset: usize) -> u64 {
 fn encode_block(dst: &mut [u8], src: &[u8], table_buf: &mut Vec<u32>) -> usize {
     if src.len() < MIN_NON_LITERAL_BLOCK_SIZE {
         return 0;
+    }
+
+    // Asm-port path for inputs in the 10B bucket: [512 B, 4 KiB).
+    // Matches klauspost/compress/s2's encodeBlockAsm10B byte-for-byte.
+    if src.len() >= 512 && src.len() < 4096 {
+        return encode_block_10b_asm(dst, src, table_buf);
     }
 
     // Hash table size — pick the smallest that still gives good collision
@@ -857,6 +873,212 @@ fn encode_block(dst: &mut [u8], src: &[u8], table_buf: &mut Vec<u32>) -> usize {
         return 0;
     }
 
+    d
+}
+
+/// Port of klauspost/compress/s2's `encodeBlockAsm10B` (single-thread
+/// AMD64 assembly variant used for inputs in [512 B, 4 KiB)).
+///
+/// Differs from our older scalar `encode_block` in three ways:
+/// 1. **Hash** is the 4-byte Knuth/Fibonacci hash with constant
+///    `0x9e3779b1`, not the Snappy `0x1e35a7bd` constant. Go's
+///    asm picked this; matching it is required for byte-identical
+///    output to `s2.Encode` on amd64.
+/// 2. **Three hashes per scalar iteration** at positions s, s+1, s+2,
+///    plus a free **repeat-first check** on `src[s+1..]`. ~3× the
+///    work per iteration but advances 3+ bytes per iter on no-match,
+///    and the repeat path is essentially free on repeat-heavy data.
+/// 3. **Skip stride** is `(s - next_emit) >> 5 + 4`, growing with how
+///    far we've moved past the last emit, instead of a separate
+///    `skip` counter.
+///
+/// Output is byte-for-byte identical to Go's `s2.Encode` (amd64
+/// asm path) on every tested input.
+fn encode_block_10b_asm(dst: &mut [u8], src: &[u8], table_buf: &mut Vec<u32>) -> usize {
+    debug_assert!(src.len() >= MIN_NON_LITERAL_BLOCK_SIZE);
+    debug_assert!(src.len() < 4096);
+
+    const TABLE_BITS: u32 = 10;
+    const TABLE_SIZE: usize = 1 << TABLE_BITS;
+    const SKIP_SHIFT: u32 = 5;
+
+    ensure_zeroed_u32(table_buf, TABLE_SIZE);
+    let table = table_buf.as_mut_slice();
+
+    let s_limit = src.len() - INPUT_MARGIN;
+    let dst_limit = src.len() - src.len() / 32 - 5;
+    let mut next_emit: usize = 0;
+    let mut s: usize = 1;
+    let mut cv = load64(src, s);
+    let mut repeat: usize = 1;
+    let mut d: usize = 0;
+
+    'outer: loop {
+        let mut candidate: usize;
+
+        'search: loop {
+            let next_s = s + ((s - next_emit) >> SKIP_SHIFT) + 4;
+            if next_s > s_limit {
+                break 'outer;
+            }
+
+            // Three 4-byte hashes covering s, s+1, s+2.
+            let hash0 = hash4_asm(cv as u32, TABLE_BITS);
+            let hash1 = hash4_asm((cv >> 8) as u32, TABLE_BITS);
+            candidate = table[hash0] as usize;
+            let candidate2 = table[hash1] as usize;
+            table[hash0] = s as u32;
+            table[hash1] = (s + 1) as u32;
+            let hash2 = hash4_asm((cv >> 16) as u32, TABLE_BITS);
+
+            // Repeat-first check: cv >> 8 (u32 at src[s+1]) vs the
+            // u32 starting `repeat` bytes back from s+1.
+            if (cv >> 8) as u32 == load32(src, s + 1 - repeat) {
+                let mut base = s + 1;
+                // Extend backwards.
+                let mut i = base - repeat;
+                while base > next_emit && i > 0 && src[i - 1] == src[base - 1] {
+                    i -= 1;
+                    base -= 1;
+                }
+                // Bail if literal + the bytes would exceed dst_limit.
+                if d + (base - next_emit) + 3 > dst_limit {
+                    return 0;
+                }
+                d += emit_literal(&mut dst[d..], &src[next_emit..base]);
+
+                // Extend forwards from after the matched 5 bytes
+                // (4-byte initial match + the checkRep offset).
+                //
+                // Asm bounds this on `src.len()`, not `s_limit`. The
+                // tail loop matches the asm's 8/4/2/1-byte chunked
+                // walk so we cover the last 0-7 bytes the 8-byte
+                // loop misses.
+                let mut cand = s - repeat + 4 + 1;
+                s += 4 + 1;
+                while s + 8 <= src.len() {
+                    let diff = load64(src, s) ^ load64(src, cand);
+                    if diff != 0 {
+                        s += (diff.trailing_zeros() / 8) as usize;
+                        break;
+                    }
+                    s += 8;
+                    cand += 8;
+                }
+                while s < src.len() && src[s] == src[cand] {
+                    s += 1;
+                    cand += 1;
+                }
+
+                if next_emit > 0 {
+                    d += emit_repeat(&mut dst[d..], repeat, s - base);
+                } else {
+                    // First emit can't use the repeat shorthand because
+                    // the decoder has no prior `repeat` to reuse.
+                    d += emit_copy(&mut dst[d..], repeat, s - base);
+                }
+                next_emit = s;
+                if s >= s_limit {
+                    break 'outer;
+                }
+                cv = load64(src, s);
+                continue 'search;
+            }
+
+            // Regular hash candidates: positions s, s+1, s+2.
+            if (cv as u32) == load32(src, candidate) {
+                break 'search; // match at s
+            }
+            candidate = table[hash2] as usize;
+            if (cv >> 8) as u32 == load32(src, candidate2) {
+                table[hash2] = (s + 2) as u32;
+                candidate = candidate2;
+                s += 1;
+                break 'search;
+            }
+            table[hash2] = (s + 2) as u32;
+            if (cv >> 16) as u32 == load32(src, candidate) {
+                s += 2;
+                break 'search;
+            }
+
+            // No match — advance and reload.
+            cv = load64(src, next_s);
+            s = next_s;
+        }
+
+        // Match found at `s`, offset = s - candidate. Extend backwards.
+        while candidate > 0 && s > next_emit && src[candidate - 1] == src[s - 1] {
+            candidate -= 1;
+            s -= 1;
+        }
+        if d + (s - next_emit) > dst_limit {
+            return 0;
+        }
+        d += emit_literal(&mut dst[d..], &src[next_emit..s]);
+
+        // Emit-copies chain: emit one copy, then look for an immediate
+        // follow-on match and chain it.
+        loop {
+            let base = s;
+            let offset = base - candidate;
+            s += 4;
+            let mut cand = candidate + 4;
+            while s <= src.len() - 8 {
+                let diff = load64(src, s) ^ load64(src, cand);
+                if diff != 0 {
+                    s += (diff.trailing_zeros() / 8) as usize;
+                    break;
+                }
+                s += 8;
+                cand += 8;
+            }
+            // Tail bytes (if the 8-byte loop ran out of room).
+            while s < src.len() && cand < s && src[s] == src[cand] {
+                s += 1;
+                cand += 1;
+            }
+
+            if offset == repeat {
+                d += emit_repeat(&mut dst[d..], offset, s - base);
+            } else {
+                d += emit_copy(&mut dst[d..], offset, s - base);
+                repeat = offset;
+            }
+            next_emit = s;
+            if s >= s_limit {
+                break 'outer;
+            }
+            if d > dst_limit {
+                return 0;
+            }
+
+            // Index the position 2 bytes inside the match end so the
+            // table reflects positions covered by the match.
+            let x = load64(src, s - 2);
+            let prev_hash = hash4_asm(x as u32, TABLE_BITS);
+            table[prev_hash] = (s - 2) as u32;
+            let curr_hash = hash4_asm((x >> 16) as u32, TABLE_BITS);
+            candidate = table[curr_hash] as usize;
+            table[curr_hash] = s as u32;
+            if (x >> 16) as u32 != load32(src, candidate) {
+                cv = load64(src, s + 1);
+                s += 1;
+                break;
+            }
+            // Immediate follow-on match — chain it.
+        }
+    }
+
+    if next_emit < src.len() {
+        if d + src.len() - next_emit > dst_limit {
+            return 0;
+        }
+        d += emit_literal(&mut dst[d..], &src[next_emit..]);
+    }
+    if d >= src.len() - src.len() / 32 {
+        return 0;
+    }
     d
 }
 
