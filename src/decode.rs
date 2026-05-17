@@ -192,8 +192,7 @@ fn s2_decode(dst: &mut [u8], src: &[u8]) -> Result<()> {
                     return Err(Error::Corrupt);
                 }
 
-                offset =
-                    u32::from_le_bytes(src[s + 1..s + 5].try_into().unwrap()) as usize;
+                offset = u32::from_le_bytes(src[s + 1..s + 5].try_into().unwrap()) as usize;
                 let length = 1 + ((src[s] >> 2) as usize);
                 s += 5;
 
@@ -272,8 +271,7 @@ fn s2_decode(dst: &mut [u8], src: &[u8]) -> Result<()> {
                     return Err(Error::Corrupt);
                 }
 
-                offset =
-                    u32::from_le_bytes(src[s - 4..s].try_into().unwrap()) as usize;
+                offset = u32::from_le_bytes(src[s - 4..s].try_into().unwrap()) as usize;
                 let length = 1 + ((src[s - 5] >> 2) as usize);
 
                 // Bounds check
@@ -389,8 +387,7 @@ fn s2_decode_dict(dst: &mut [u8], src: &[u8], dict: &Dict) -> Result<()> {
                     return Err(Error::Corrupt);
                 }
 
-                offset =
-                    u32::from_le_bytes(src[s + 1..s + 5].try_into().unwrap()) as usize;
+                offset = u32::from_le_bytes(src[s + 1..s + 5].try_into().unwrap()) as usize;
                 let length = 1 + ((src[s] >> 2) as usize);
                 s += 5;
 
@@ -511,8 +508,7 @@ fn s2_decode_dict(dst: &mut [u8], src: &[u8], dict: &Dict) -> Result<()> {
                     return Err(Error::Corrupt);
                 }
 
-                offset =
-                    u32::from_le_bytes(src[s - 4..s].try_into().unwrap()) as usize;
+                offset = u32::from_le_bytes(src[s - 4..s].try_into().unwrap()) as usize;
                 let length = 1 + ((src[s - 5] >> 2) as usize);
 
                 // Bounds check
@@ -622,8 +618,8 @@ fn decode_copy1(src: &[u8], last_offset: usize) -> Result<(usize, usize, usize)>
                     return Err(Error::Corrupt);
                 }
                 // Read 4 bytes starting at src[1] and shift out the count byte.
-                length = (u32::from_le_bytes(src[1..5].try_into().unwrap()) >> 8) as usize
-                    + (1 << 16);
+                length =
+                    (u32::from_le_bytes(src[1..5].try_into().unwrap()) >> 8) as usize + (1 << 16);
                 Ok((last_offset, length + 4, 5))
             }
             _ => {

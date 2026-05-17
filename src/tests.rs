@@ -1630,8 +1630,8 @@ fn test_encode_zero_runs_roundtrip() {
     // Minimal hand-shrunk reproducer: 6 zeros, 14 repeated bytes, 12 zeros.
     let cases: &[&[u8]] = &[
         &[
-            0, 0, 0, 0, 0, 0, 203, 203, 203, 203, 203, 203, 203, 203, 203, 203, 203, 203, 203,
-            203, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 203, 203, 203, 203, 203, 203, 203, 203, 203, 203, 203, 203, 203, 203,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         ],
         // A second pattern with the literal in the middle and zero runs around it.
         &[
@@ -1658,7 +1658,11 @@ fn test_encode_zero_runs_roundtrip() {
     use crate::{encode_best, encode_better};
     for (i, src) in cases.iter().enumerate() {
         let b = encode_better(src);
-        assert_eq!(*src, decode(&b).unwrap().as_slice(), "encode_better case {i}");
+        assert_eq!(
+            *src,
+            decode(&b).unwrap().as_slice(),
+            "encode_better case {i}"
+        );
         let b = encode_best(src);
         assert_eq!(*src, decode(&b).unwrap().as_slice(), "encode_best case {i}");
     }

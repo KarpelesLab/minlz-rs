@@ -101,7 +101,9 @@ fn ensure_zeroed_u16(buf: &mut Vec<u16>, size: usize) {
         buf.clear();
         // SAFETY: capacity ≥ size and u16 has no Drop; we immediately
         // overwrite every element via fill below.
-        unsafe { buf.set_len(size); }
+        unsafe {
+            buf.set_len(size);
+        }
         buf.fill(0);
     } else {
         *buf = vec![0u16; size];
@@ -112,7 +114,9 @@ fn ensure_zeroed_u16(buf: &mut Vec<u16>, size: usize) {
 fn ensure_zeroed_u32(buf: &mut Vec<u32>, size: usize) {
     if buf.capacity() >= size {
         buf.clear();
-        unsafe { buf.set_len(size); }
+        unsafe {
+            buf.set_len(size);
+        }
         buf.fill(0);
     } else {
         *buf = vec![0u32; size];
@@ -123,7 +127,9 @@ fn ensure_zeroed_u32(buf: &mut Vec<u32>, size: usize) {
 fn ensure_zeroed_u64(buf: &mut Vec<u64>, size: usize) {
     if buf.capacity() >= size {
         buf.clear();
-        unsafe { buf.set_len(size); }
+        unsafe {
+            buf.set_len(size);
+        }
         buf.fill(0);
     } else {
         *buf = vec![0u64; size];
