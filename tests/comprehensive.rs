@@ -245,3 +245,49 @@ fn test_compression_levels_quality() {
         "best should compress as well or better than better"
     );
 }
+
+#[test]
+fn regression_asm_port_match_extension_off_by_n() {
+    // Fuzz-caught in CI on commit a78ac39 (encode_block_*_asm port).
+    // The SIMD 8-byte diff-break in the asm-port match extension was
+    // advancing `s` by trailing_zeros/8 but leaving `cand` unchanged,
+    // so the byte-tail loop compared stale `cand` against the new `s`.
+    // For this 32-byte input the bug extended a real 5-byte match by
+    // one accidental matching byte, producing a copy that decoded with
+    // a wrong byte at position 17.
+    let input: &[u8] = &[
+        0xff, 0x21, 0xff, 0xff, 0xff, 0x24, 0xff, 0xff, 0xff, 0x00, 0x00, 0x21, 0xff, 0x21, 0xff,
+        0xff, 0xff, 0xff, 0xfe, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x24, 0xff, 0xff, 0x0a,
+        0x21, 0xff,
+    ];
+    assert_eq!(input, &decode(&encode(input)).unwrap()[..]);
+}
+
+#[test]
+fn regression_asm_port_repeat_on_first_emit() {
+    // Fuzz-caught in CI on commit a78ac39 (encode_block_*_asm port).
+    // The normal-match branch emitted a repeat-shorthand whenever
+    // `offset == repeat`, but `repeat` was initialized to 1 and the
+    // decoder has no remembered offset until a real copy lands. When
+    // the first emitted copy in a block happened to use offset 1,
+    // the encoder wrote a repeat tag (0x15 0x00 …) which the decoder
+    // rejected as Corrupt because `offset == 0` at that point.
+    let input: &[u8] = &[
+        0x34, 0x66, 0xff, 0xff, 0xff, 0x27, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0x34,
+    ];
+    assert_eq!(input, &decode(&encode(input)).unwrap()[..]);
+
+    // Same input through the stream Writer/Reader path (this was the
+    // fuzz_stream failure mode).
+    let mut compressed = Vec::new();
+    {
+        let mut w = Writer::new(&mut compressed);
+        w.write_all(input).unwrap();
+        w.flush().unwrap();
+    }
+    let mut out = Vec::new();
+    Reader::new(&compressed[..]).read_to_end(&mut out).unwrap();
+    assert_eq!(input, &out[..]);
+}

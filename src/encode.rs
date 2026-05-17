@@ -848,7 +848,9 @@ fn encode_block_10b_asm(dst: &mut [u8], src: &[u8], table_buf: &mut Vec<u32>) ->
                 while s + 8 <= src.len() {
                     let diff = load64(src, s) ^ load64(src, cand);
                     if diff != 0 {
-                        s += (diff.trailing_zeros() / 8) as usize;
+                        let k = (diff.trailing_zeros() / 8) as usize;
+                        s += k;
+                        cand += k;
                         break;
                     }
                     s += 8;
@@ -916,7 +918,9 @@ fn encode_block_10b_asm(dst: &mut [u8], src: &[u8], table_buf: &mut Vec<u32>) ->
             while s <= src.len() - 8 {
                 let diff = load64(src, s) ^ load64(src, cand);
                 if diff != 0 {
-                    s += (diff.trailing_zeros() / 8) as usize;
+                    let k = (diff.trailing_zeros() / 8) as usize;
+                    s += k;
+                    cand += k;
                     break;
                 }
                 s += 8;
@@ -928,7 +932,7 @@ fn encode_block_10b_asm(dst: &mut [u8], src: &[u8], table_buf: &mut Vec<u32>) ->
                 cand += 1;
             }
 
-            if offset == repeat {
+            if offset == repeat && next_emit > 0 {
                 d += emit_repeat(&mut dst[d..], offset, s - base);
             } else {
                 d += emit_copy(&mut dst[d..], offset, s - base);
@@ -1024,7 +1028,9 @@ fn encode_block_8b_asm(dst: &mut [u8], src: &[u8], table_buf: &mut Vec<u32>) -> 
                 while s + 8 <= src.len() {
                     let diff = load64(src, s) ^ load64(src, cand);
                     if diff != 0 {
-                        s += (diff.trailing_zeros() / 8) as usize;
+                        let k = (diff.trailing_zeros() / 8) as usize;
+                        s += k;
+                        cand += k;
                         break;
                     }
                     s += 8;
@@ -1084,7 +1090,9 @@ fn encode_block_8b_asm(dst: &mut [u8], src: &[u8], table_buf: &mut Vec<u32>) -> 
             while s + 8 <= src.len() {
                 let diff = load64(src, s) ^ load64(src, cand);
                 if diff != 0 {
-                    s += (diff.trailing_zeros() / 8) as usize;
+                    let k = (diff.trailing_zeros() / 8) as usize;
+                    s += k;
+                    cand += k;
                     break;
                 }
                 s += 8;
@@ -1095,7 +1103,7 @@ fn encode_block_8b_asm(dst: &mut [u8], src: &[u8], table_buf: &mut Vec<u32>) -> 
                 cand += 1;
             }
 
-            if offset == repeat {
+            if offset == repeat && next_emit > 0 {
                 d += emit_repeat(&mut dst[d..], offset, s - base);
             } else {
                 d += emit_copy(&mut dst[d..], offset, s - base);
@@ -1191,7 +1199,9 @@ fn encode_block_12b_asm(dst: &mut [u8], src: &[u8], table_buf: &mut Vec<u32>) ->
                 while s + 8 <= src.len() {
                     let diff = load64(src, s) ^ load64(src, cand);
                     if diff != 0 {
-                        s += (diff.trailing_zeros() / 8) as usize;
+                        let k = (diff.trailing_zeros() / 8) as usize;
+                        s += k;
+                        cand += k;
                         break;
                     }
                     s += 8;
@@ -1251,7 +1261,9 @@ fn encode_block_12b_asm(dst: &mut [u8], src: &[u8], table_buf: &mut Vec<u32>) ->
             while s + 8 <= src.len() {
                 let diff = load64(src, s) ^ load64(src, cand);
                 if diff != 0 {
-                    s += (diff.trailing_zeros() / 8) as usize;
+                    let k = (diff.trailing_zeros() / 8) as usize;
+                    s += k;
+                    cand += k;
                     break;
                 }
                 s += 8;
@@ -1262,7 +1274,7 @@ fn encode_block_12b_asm(dst: &mut [u8], src: &[u8], table_buf: &mut Vec<u32>) ->
                 cand += 1;
             }
 
-            if offset == repeat {
+            if offset == repeat && next_emit > 0 {
                 d += emit_repeat(&mut dst[d..], offset, s - base);
             } else {
                 d += emit_copy(&mut dst[d..], offset, s - base);
@@ -1355,7 +1367,9 @@ fn encode_block_4mb_asm(dst: &mut [u8], src: &[u8], table_buf: &mut Vec<u32>) ->
                 while s + 8 <= src.len() {
                     let diff = load64(src, s) ^ load64(src, cand);
                     if diff != 0 {
-                        s += (diff.trailing_zeros() / 8) as usize;
+                        let k = (diff.trailing_zeros() / 8) as usize;
+                        s += k;
+                        cand += k;
                         break;
                     }
                     s += 8;
@@ -1415,7 +1429,9 @@ fn encode_block_4mb_asm(dst: &mut [u8], src: &[u8], table_buf: &mut Vec<u32>) ->
             while s + 8 <= src.len() {
                 let diff = load64(src, s) ^ load64(src, cand);
                 if diff != 0 {
-                    s += (diff.trailing_zeros() / 8) as usize;
+                    let k = (diff.trailing_zeros() / 8) as usize;
+                    s += k;
+                    cand += k;
                     break;
                 }
                 s += 8;
@@ -1426,7 +1442,7 @@ fn encode_block_4mb_asm(dst: &mut [u8], src: &[u8], table_buf: &mut Vec<u32>) ->
                 cand += 1;
             }
 
-            if offset == repeat {
+            if offset == repeat && next_emit > 0 {
                 d += emit_repeat(&mut dst[d..], offset, s - base);
             } else {
                 d += emit_copy(&mut dst[d..], offset, s - base);
