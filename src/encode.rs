@@ -561,9 +561,19 @@ fn encode_block(dst: &mut [u8], src: &[u8]) -> usize {
         return 0;
     }
 
-    // Hash table size - use 14 bits for blocks up to 64KB, otherwise 17 bits
-    let table_bits = if src.len() <= 64 * 1024 { 14 } else { 17 };
-    let table_size = 1 << table_bits;
+    // Hash table size — pick the smallest that still gives good collision
+    // behavior for the input. Smaller tables fit in L1 and (more importantly
+    // for tiny blocks) avoid zeroing 64 KB on every call.
+    let table_bits: u32 = if src.len() < 1024 {
+        10
+    } else if src.len() < 8 * 1024 {
+        12
+    } else if src.len() <= 64 * 1024 {
+        14
+    } else {
+        17
+    };
+    let table_size = 1usize << table_bits;
     let shift = 32 - table_bits;
 
     let mut table = vec![0u32; table_size];
