@@ -529,30 +529,26 @@ fn hash8(u: u64, h: u8) -> u32 {
     ((u.wrapping_mul(PRIME_8_BYTES)) >> ((64 - h) & 63)) as u32
 }
 
-/// Load a u32 from the slice at the given offset
-#[inline]
+/// Load a u32 from the slice at the given offset.
+/// Reading the bytes through a single slice + try_into lets LLVM elide
+/// the per-byte bounds checks and emit one unaligned 4-byte load.
+#[inline(always)]
 fn load32(data: &[u8], offset: usize) -> u32 {
-    u32::from_le_bytes([
-        data[offset],
-        data[offset + 1],
-        data[offset + 2],
-        data[offset + 3],
-    ])
+    let bytes: [u8; 4] = data[offset..offset + 4]
+        .try_into()
+        .expect("load32: slice length mismatch");
+    u32::from_le_bytes(bytes)
 }
 
-/// Load a u64 from the slice at the given offset
-#[inline]
+/// Load a u64 from the slice at the given offset.
+/// Reading the bytes through a single slice + try_into lets LLVM elide
+/// the per-byte bounds checks and emit one unaligned 8-byte load.
+#[inline(always)]
 fn load64(data: &[u8], offset: usize) -> u64 {
-    u64::from_le_bytes([
-        data[offset],
-        data[offset + 1],
-        data[offset + 2],
-        data[offset + 3],
-        data[offset + 4],
-        data[offset + 5],
-        data[offset + 6],
-        data[offset + 7],
-    ])
+    let bytes: [u8; 8] = data[offset..offset + 8]
+        .try_into()
+        .expect("load64: slice length mismatch");
+    u64::from_le_bytes(bytes)
 }
 
 /// Encode a block using the S2 algorithm
