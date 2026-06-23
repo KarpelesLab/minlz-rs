@@ -37,11 +37,13 @@ This crate provides two distinct, wire-incompatible compression formats:
 | Feature | `s2` (default) | `minlz` (default) |
 | Upstream | [klauspost/compress/s2](https://github.com/klauspost/compress/tree/master/s2) | [minio/minlz](https://github.com/minio/minlz) |
 | Wire compat | byte-for-byte with Go `s2` | independent format (decodes Snappy/S2; its output is **not** readable by them) |
-| Status | block + stream + index + dict | **block format** (`compress`/`decompress`); stream/index/dict planned |
+| Status | block + stream + index + dict | block, stream, index/seeking, levels, Snappy/S2 fallback, CLI (dictionary is crate-local) |
 
 > **Note on the crate name:** despite being named `minlz`, this crate's root API has always been the **S2** codec, and remains so for backwards compatibility. The MinLZ codec lives under the `minlz::minlz` module.
 
 ```rust
+use std::io::{Read, Write};
+
 // S2 (unchanged, at the crate root):
 let c = minlz::encode(b"hello hello hello");
 let d = minlz::decode(&c).unwrap();
@@ -49,9 +51,25 @@ let d = minlz::decode(&c).unwrap();
 // MinLZ block codec:
 let c = minlz::minlz::compress(b"hello hello hello").unwrap();
 let d = minlz::minlz::decompress(&c).unwrap();
+
+// MinLZ stream codec (CRC32C-checked framing, interoperable with `.mz` files):
+let mut w = minlz::minlz::Writer::new(Vec::new());
+w.write_all(b"hello hello hello").unwrap();
+let stream = w.finish().unwrap();
+let mut out = Vec::new();
+minlz::minlz::Reader::new(&stream[..]).read_to_end(&mut out).unwrap();
 ```
 
-MinLZ is an LZ77-style, byte-aligned format in the same family as Snappy/S2, with a different tag scheme (repeat/last-offset copies, fused literal+copy operations, three copy-offset ranges) and an 8 MiB maximum block size. This is an independent implementation of [MinLZ specification v1.0](https://github.com/minio/minlz/blob/main/SPEC.md); the decoder follows the reference decoder, and the encoder's output is verified to decode correctly with the reference implementation. The encoder's exact bytes are implementation-defined and may differ from the reference.
+What's implemented in `minlz::minlz`:
+
+- **Block**: `compress` / `compress_level` / `decompress` / `decompress_into` / `decompressed_len`. Levels: `Level::{Fastest, Balanced, Smallest}`.
+- **Stream** (`std`): `Writer` (CRC32C framing, `.with_index()`) and `Reader`, interoperable with the reference `.mz` format.
+- **Index / seeking** (`std`): `Index::load` + `seek_decompress` for random access into a stream.
+- **Snappy/S2 fallback**: `decompress` transparently decodes S2/Snappy blocks (with the `s2` feature).
+- **Dictionary**: `Dict` + `compress_with_dict` / `decompress_with_dict` (crate-local format — see below).
+- **CLI**: `mzc` / `mzd` in `minlz-tools`.
+
+MinLZ is an LZ77-style, byte-aligned format in the same family as Snappy/S2, with a different tag scheme (repeat/last-offset copies, fused literal+copy operations, three copy-offset ranges) and an 8 MiB maximum block size. This is an independent implementation of [MinLZ specification v1.0](https://github.com/minio/minlz/blob/main/SPEC.md); the decoder follows the reference decoder, and the encoder's output is verified to decode correctly with the reference. The encoder's exact bytes are implementation-defined and may differ from the reference. The **dictionary** format is unspecified in the MinLZ spec (marked "TBD", with no public reference API), so `Dict` is a crate-local, self-consistent format and is **not** interoperable with `github.com/minio/minlz`.
 
 ## S2 Format
 
@@ -259,6 +277,19 @@ s2d --verify input.txt.s2  # Verify integrity
 ```
 
 The tools are cross-compatible with Go's s2c/s2d and offer 12-98x faster performance depending on the operation.
+
+For the **MinLZ** format, the same package provides `mzc` / `mzd`:
+
+```bash
+# Compress (interoperable with reference .mz files)
+mzc input.txt                       # Creates input.txt.mz
+mzc --level smallest --index in.txt # Best ratio + seek index
+
+# Decompress
+mzd input.txt.mz                    # Creates input.txt
+mzd -c input.txt.mz                 # Write to stdout
+mzd --offset 1048576 in.txt.mz      # Seek (needs an indexed stream)
+```
 
 See [minlz-tools/README.md](minlz-tools/README.md) for complete documentation.
 
