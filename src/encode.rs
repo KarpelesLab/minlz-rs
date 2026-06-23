@@ -7,6 +7,7 @@ use crate::constants::*;
 use crate::dict::Dict;
 use crate::error::{Error, Result};
 use crate::varint::encode_varint;
+use alloc::vec::Vec;
 
 /// Stateful encoder that reuses internal hash-table buffers across calls.
 ///

@@ -2,6 +2,8 @@
 // Dictionary support for S2 compression
 
 use crate::varint::{decode_varint, encode_varint, varint_size};
+use alloc::boxed::Box;
+use alloc::vec::Vec;
 
 /// Minimum dictionary size
 pub const MIN_DICT_SIZE: usize = 16;

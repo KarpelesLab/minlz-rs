@@ -22,6 +22,7 @@ A high-performance Rust implementation of the S2 compression format, providing b
 - **Concurrent Compression**: Optional parallel compression with Rayon
 - **Index Support**: Seeking within compressed streams
 - **Mostly Safe Rust**: A few well-documented `unsafe` blocks in hot paths (uninitialised `Vec` allocation); covered by unit, property-based, libfuzzer, and Go-binary-compat tests
+- **`no_std` Support**: The block API (`encode*`/`decode*`/`Dict`/`Index`) works on `no_std` + `alloc`; disable default features to drop the `std`-only streaming layer
 
 ## S2 Format
 
@@ -53,6 +54,17 @@ Enable concurrent compression for improved performance on multi-core systems:
 ```toml
 [dependencies]
 minlz = { version = "1", features = ["concurrent"] }
+```
+
+#### `no_std`
+
+The crate is `no_std`-compatible (requires `alloc`). Disabling the default
+`std` feature drops the streaming layer (`Reader`/`Writer`/`ConcurrentWriter`)
+and keeps the block API (`encode*`/`decode*`/`Dict`/`Index`):
+
+```toml
+[dependencies]
+minlz = { version = "1", default-features = false }
 ```
 
 ## Usage

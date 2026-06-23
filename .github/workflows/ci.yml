@@ -170,8 +170,26 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Test with no default features
-        run: cargo test --no-default-features --verbose
+      # The test harness itself needs std, so a no-default-features run can only
+      # build the library (block API). The dedicated `no-std` job below proves it
+      # links on a bare-metal target.
+      - name: Build with no default features
+        run: cargo build --no-default-features --verbose
 
       - name: Test with all features
         run: cargo test --all-features --verbose
+
+  no-std:
+    name: no_std (bare-metal)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: thumbv7em-none-eabi
+
+      - name: Build library for thumbv7em-none-eabi (no_std + alloc)
+        run: cargo build --lib --no-default-features --target thumbv7em-none-eabi --verbose

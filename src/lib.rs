@@ -3,6 +3,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+#![cfg_attr(not(feature = "std"), no_std)]
+
 //! # S2 Compression
 //!
 //! This library implements the S2 compression format, which is an extension of Snappy.
@@ -25,6 +27,9 @@
 //! assert_eq!(data, &decompressed[..]);
 //! ```
 
+#[macro_use]
+extern crate alloc;
+
 mod constants;
 pub mod crc;
 mod decode;
@@ -32,8 +37,11 @@ mod dict;
 mod encode;
 mod error;
 mod index;
-mod reader;
 mod varint;
+
+#[cfg(feature = "std")]
+mod reader;
+#[cfg(feature = "std")]
 mod writer;
 
 #[cfg(feature = "concurrent")]
@@ -51,14 +59,17 @@ pub use encode::{
 };
 pub use error::{Error, Result};
 pub use index::Index;
+
+#[cfg(feature = "std")]
 pub use reader::Reader;
+#[cfg(feature = "std")]
 pub use writer::Writer;
 
 #[cfg(feature = "concurrent")]
 pub use concurrent::ConcurrentWriter;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "std"))]
 mod tests;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "std"))]
 mod snappy_tests;

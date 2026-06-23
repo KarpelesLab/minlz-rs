@@ -7,6 +7,7 @@ use crate::constants::*;
 use crate::dict::{Dict, MAX_DICT_SRC_OFFSET};
 use crate::error::{Error, Result};
 use crate::varint::decode_varint;
+use alloc::vec::Vec;
 
 /// Decoder for S2 and Snappy compression
 pub struct Decoder {

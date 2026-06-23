@@ -3,6 +3,10 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+// Several stream/block framing constants are only consumed by the `std`-gated
+// `reader`/`writer` modules; without `std` they are legitimately unused.
+#![cfg_attr(not(feature = "std"), allow(dead_code))]
+
 /// Tag for literal chunks
 pub const TAG_LITERAL: u8 = 0x00;
 

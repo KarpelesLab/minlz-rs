@@ -3,6 +3,8 @@
 
 use crate::constants::CHUNK_TYPE_INDEX;
 use crate::error::{Error, Result};
+use alloc::string::ToString;
+use alloc::vec::Vec;
 
 /// S2 Index header and trailer constants
 const S2_INDEX_HEADER: &[u8] = b"s2idx\x00";

@@ -3,10 +3,11 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-use std::fmt;
+use alloc::string::String;
+use core::fmt;
 
 /// Result type for S2 operations
-pub type Result<T> = std::result::Result<T, Error>;
+pub type Result<T> = core::result::Result<T, Error>;
 
 /// Error types for S2 compression/decompression
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -43,4 +44,4 @@ impl fmt::Display for Error {
     }
 }
 
-impl std::error::Error for Error {}
+impl core::error::Error for Error {}

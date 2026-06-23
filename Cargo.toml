@@ -1,7 +1,8 @@
 [package]
 name = "minlz"
-version = "1.1.0"
+version = "1.2.0"
 edition = "2021"
+rust-version = "1.81"
 authors = ["Karpeles Lab Inc."]
 description = "S2 compression format - compatible with klauspost/compress/s2"
 license = "BSD-3-Clause"
@@ -16,8 +17,12 @@ crc = "3.3.0"
 rayon = { version = "1.8", optional = true }
 
 [features]
-default = []
-concurrent = ["rayon"]
+default = ["std"]
+# Enables the streaming API (`Reader`, `Writer`, `ConcurrentWriter`) and the
+# `std::io` integration. Disable (`--no-default-features`) for a `no_std` +
+# `alloc` build exposing the block API (`encode*`/`decode*`/`Dict`/`Index`).
+std = []
+concurrent = ["std", "rayon"]
 
 [dev-dependencies]
 criterion = "0.5"
