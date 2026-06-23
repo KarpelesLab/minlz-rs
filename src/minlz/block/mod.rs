@@ -12,6 +12,12 @@ mod encode;
 pub use decode::{decompress, decompress_into, decompressed_len};
 pub use encode::{compress, compress_level, max_compressed_len};
 
+// Indicator-less block helpers used by the stream format (chunk type 0x02).
+#[cfg(feature = "std")]
+pub(crate) use decode::decompress_body;
+#[cfg(feature = "std")]
+pub(crate) use encode::compress_body;
+
 /// Compression level for the MinLZ encoder.
 ///
 /// All levels produce valid MinLZ blocks; they trade encode time for ratio.

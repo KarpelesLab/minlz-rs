@@ -41,3 +41,8 @@ pub use block::{
     compress, compress_level, decompress, decompress_into, decompressed_len, max_compressed_len,
     Level, MAX_BLOCK_SIZE,
 };
+
+#[cfg(feature = "std")]
+mod stream;
+#[cfg(feature = "std")]
+pub use stream::{Reader, Writer};

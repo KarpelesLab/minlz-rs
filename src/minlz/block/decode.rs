@@ -152,6 +152,27 @@ pub fn decompress_into(dst: &mut [u8], src: &[u8]) -> Result<usize> {
     }
 }
 
+/// Decode a stream block body — `[uvarint(len)][tokens]` with no indicator byte
+/// (stream chunk type 0x02/0x03) — into a freshly allocated `Vec`.
+///
+/// `max_block` bounds the decoded length. Empty blocks and blocks whose token
+/// stream is larger than their output are rejected, matching the reference.
+#[cfg(feature = "std")]
+pub(crate) fn decompress_body(body: &[u8], max_block: usize) -> Result<Vec<u8>> {
+    let (v, hlen) = decode_varint(body)?;
+    if v > max_block as u64 {
+        return Err(Error::TooLarge);
+    }
+    let tokens = &body[hlen..];
+    let n = v as usize;
+    if n == 0 || n < tokens.len() {
+        return Err(Error::Corrupt);
+    }
+    let mut dst = vec![0u8; n];
+    decode_block(&mut dst, tokens)?;
+    Ok(dst)
+}
+
 /// Decode a MinLZ token stream into `dst`, which must already be sized to the
 /// exact decompressed length. Mirrors `minLZDecodeGo`.
 fn decode_block(dst: &mut [u8], src: &[u8]) -> Result<()> {

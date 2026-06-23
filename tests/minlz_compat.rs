@@ -68,3 +68,33 @@ fn decode_reference_vectors() {
     assert!(variants >= 30, "expected many vectors, got {variants}");
     eprintln!("verified {variants} reference vectors across {inputs} inputs");
 }
+
+/// Decode reference *stream* fixtures (`.mz` data produced by the Go writer).
+///
+/// Fixture format (little-endian):
+///   [u32 "MZSV"][u32 count]
+///   per input: [u32 origLen][orig][u32 streamLen][stream]
+#[cfg(feature = "std")]
+#[test]
+fn decode_reference_streams() {
+    use std::io::Read;
+
+    let data = include_bytes!("fixtures/minlz_streams.bin");
+    let mut c = Cursor { b: data, p: 0 };
+    assert_eq!(c.take(4), b"MZSV", "bad stream fixture magic");
+
+    let count = c.u32();
+    for i in 0..count {
+        let orig_len = c.u32();
+        let orig = c.take(orig_len).to_vec();
+        let stream_len = c.u32();
+        let stream = c.take(stream_len);
+
+        let mut out = Vec::new();
+        minlz::minlz::Reader::new(stream)
+            .read_to_end(&mut out)
+            .unwrap_or_else(|e| panic!("stream #{i}: read: {e:?}"));
+        assert_eq!(out, orig, "stream #{i}: decoded bytes mismatch");
+    }
+    eprintln!("verified {count} reference streams");
+}
