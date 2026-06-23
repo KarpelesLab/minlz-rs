@@ -17,12 +17,18 @@ crc = "3.3.0"
 rayon = { version = "1.8", optional = true }
 
 [features]
-default = ["std"]
+default = ["std", "s2", "minlz"]
 # Enables the streaming API (`Reader`, `Writer`, `ConcurrentWriter`) and the
 # `std::io` integration. Disable (`--no-default-features`) for a `no_std` +
-# `alloc` build exposing the block API (`encode*`/`decode*`/`Dict`/`Index`).
+# `alloc` build exposing the block APIs.
 std = []
-concurrent = ["std", "rayon"]
+# The S2 codec (Snappy-compatible). Exposed at the crate root (`encode`/`decode`/
+# `Reader`/`Writer`/…) and under the `s2` module. This is the original codec.
+s2 = []
+# The MinLZ codec (github.com/minio/minlz, MinLZ spec v1.0). Exposed under the
+# `minlz` module.
+minlz = []
+concurrent = ["std", "s2", "rayon"]
 
 [dev-dependencies]
 criterion = "0.5"
