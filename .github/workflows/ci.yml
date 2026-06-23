@@ -58,6 +58,9 @@ jobs:
       - name: Run tests (snappy compatibility)
         run: cargo test --test snappy_compat --verbose
 
+      - name: Run tests (MinLZ reference vectors)
+        run: cargo test --test minlz_compat --verbose
+
       - name: Run doc tests
         run: cargo test --doc --verbose
 
