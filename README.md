@@ -9,6 +9,8 @@
 
 A high-performance Rust implementation of the S2 compression format, providing binary compatibility with the Go implementation at [github.com/klauspost/compress/s2](https://github.com/klauspost/compress/tree/master/s2).
 
+This crate also ships a second, independent codec: **[MinLZ](#minlz)** (the format from [github.com/minio/minlz](https://github.com/minio/minlz)). The two formats are unrelated on the wire — see [Codecs: S2 vs MinLZ](#codecs-s2-vs-minlz). The historical, S2 API stays at the crate root, so existing code is unaffected.
+
 ## Features
 
 - **Binary Compatible**: All four encode modes (`encode`, `encode_better`, `encode_best`, `encode_snappy`) produce byte-for-byte identical output to Go's `s2.Encode*` on every test input
@@ -23,6 +25,33 @@ A high-performance Rust implementation of the S2 compression format, providing b
 - **Index Support**: Seeking within compressed streams
 - **Mostly Safe Rust**: A few well-documented `unsafe` blocks in hot paths (uninitialised `Vec` allocation); covered by unit, property-based, libfuzzer, and Go-binary-compat tests
 - **`no_std` Support**: The block API (`encode*`/`decode*`/`Dict`/`Index`) works on `no_std` + `alloc`; disable default features to drop the `std`-only streaming layer
+- **Two codecs**: S2 (default, at the crate root) and MinLZ (`minlz::minlz`), each behind its own feature flag
+
+## Codecs: S2 vs MinLZ
+
+This crate provides two distinct, wire-incompatible compression formats:
+
+| | **S2** | **MinLZ** |
+|---|---|---|
+| Module | crate root (and `minlz::s2`) | `minlz::minlz` |
+| Feature | `s2` (default) | `minlz` (default) |
+| Upstream | [klauspost/compress/s2](https://github.com/klauspost/compress/tree/master/s2) | [minio/minlz](https://github.com/minio/minlz) |
+| Wire compat | byte-for-byte with Go `s2` | independent format (decodes Snappy/S2; its output is **not** readable by them) |
+| Status | block + stream + index + dict | **block format** (`compress`/`decompress`); stream/index/dict planned |
+
+> **Note on the crate name:** despite being named `minlz`, this crate's root API has always been the **S2** codec, and remains so for backwards compatibility. The MinLZ codec lives under the `minlz::minlz` module.
+
+```rust
+// S2 (unchanged, at the crate root):
+let c = minlz::encode(b"hello hello hello");
+let d = minlz::decode(&c).unwrap();
+
+// MinLZ block codec:
+let c = minlz::minlz::compress(b"hello hello hello").unwrap();
+let d = minlz::minlz::decompress(&c).unwrap();
+```
+
+MinLZ is an LZ77-style, byte-aligned format in the same family as Snappy/S2, with a different tag scheme (repeat/last-offset copies, fused literal+copy operations, three copy-offset ranges) and an 8 MiB maximum block size. This is an independent implementation of [MinLZ specification v1.0](https://github.com/minio/minlz/blob/main/SPEC.md); the decoder follows the reference decoder, and the encoder's output is verified to decode correctly with the reference implementation. The encoder's exact bytes are implementation-defined and may differ from the reference.
 
 ## S2 Format
 
@@ -47,7 +76,21 @@ Add this to your `Cargo.toml`:
 minlz = "1"
 ```
 
-### Optional Features
+### Feature flags
+
+| Feature | Default | Description |
+|---|---|---|
+| `std` | ✅ | Streaming API (`Reader`/`Writer`/`ConcurrentWriter`) and `std::io` integration. Disable for `no_std` + `alloc`. |
+| `s2` | ✅ | The S2 codec (crate root + `s2` module). |
+| `minlz` | ✅ | The MinLZ codec (`minlz` module). |
+| `concurrent` | | Parallel S2 compression with Rayon (implies `std` + `s2`). |
+
+Pick a single codec to shrink the build — e.g. MinLZ only:
+
+```toml
+[dependencies]
+minlz = { version = "1", default-features = false, features = ["minlz", "std"] }
+```
 
 Enable concurrent compression for improved performance on multi-core systems:
 
@@ -60,7 +103,8 @@ minlz = { version = "1", features = ["concurrent"] }
 
 The crate is `no_std`-compatible (requires `alloc`). Disabling the default
 `std` feature drops the streaming layer (`Reader`/`Writer`/`ConcurrentWriter`)
-and keeps the block API (`encode*`/`decode*`/`Dict`/`Index`):
+and keeps the block APIs (S2 `encode*`/`decode*`/`Dict`/`Index` and MinLZ
+`minlz::compress`/`decompress`):
 
 ```toml
 [dependencies]
@@ -390,13 +434,22 @@ cargo fuzz run fuzz_stream
 
 ## License
 
-BSD-3-Clause
+BSD-3-Clause.
+
+The MinLZ codec is an independent implementation of the MinLZ specification
+v1.0. The format and its reference implementation,
+[github.com/minio/minlz](https://github.com/minio/minlz), are © 2025 MinIO Inc.
+and licensed under Apache-2.0 (itself based on snappy-go). No reference code is
+vendored; this crate's MinLZ support is original Rust written against the public
+specification and verified against the reference for interoperability.
 
 ## References
 
 - [S2 Design & Improvements](https://gist.github.com/klauspost/a25b66198cdbdf7b5b224f670c894ed5) - Overview of S2's design and improvements over Snappy
 - [Go S2 Implementation](https://github.com/klauspost/compress/tree/master/s2) - Reference implementation
 - [Snappy Format Specification](https://github.com/google/snappy/blob/main/format_description.txt) - Base Snappy format
+- [MinLZ Specification v1.0](https://github.com/minio/minlz/blob/main/SPEC.md) - MinLZ format spec
+- [Go MinLZ Implementation](https://github.com/minio/minlz) - MinLZ reference implementation
 
 ## Contributing
 

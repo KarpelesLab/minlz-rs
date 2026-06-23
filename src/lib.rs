@@ -5,10 +5,19 @@
 
 #![cfg_attr(not(feature = "std"), no_std)]
 
-//! # S2 Compression
+//! # S2 and MinLZ compression
 //!
-//! This library implements the S2 compression format, which is an extension of Snappy.
-//! It is binary compatible with the Go implementation at github.com/klauspost/compress/s2
+//! This crate provides two distinct, wire-incompatible compression codecs:
+//!
+//! - **S2** — the default, at the crate root (and mirrored under [`s2`]). Binary
+//!   compatible with the Go implementation at `github.com/klauspost/compress/s2`.
+//!   Gated behind the `s2` feature.
+//! - **MinLZ** — under [`minlz`], an independent implementation of the format from
+//!   `github.com/minio/minlz`. Gated behind the `minlz` feature.
+//!
+//! The crate is named `minlz` for historical reasons, but its root API is — and
+//! remains, for backwards compatibility — the **S2** codec. New MinLZ code lives
+//! in the [`minlz`] module.
 //!
 //! S2 provides:
 //! - Better compression than Snappy

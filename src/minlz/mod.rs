@@ -27,6 +27,13 @@
 //! This module currently implements the **block** format
 //! ([`compress`]/[`decompress`]). The streaming format, index, and dictionary
 //! support are planned.
+//!
+//! ```rust
+//! let data = b"MinLZ MinLZ MinLZ block compression";
+//! let compressed = minlz::minlz::compress(data).expect("compress");
+//! let restored = minlz::minlz::decompress(&compressed).expect("decompress");
+//! assert_eq!(&restored[..], data);
+//! ```
 
 mod block;
 
