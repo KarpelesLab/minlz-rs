@@ -10,7 +10,6 @@
 use super::{MAX_BLOCK_SIZE, MIN_COPY2_OFFSET, MIN_COPY3_OFFSET};
 use crate::error::{Error, Result};
 use crate::varint::decode_varint;
-use alloc::vec;
 use alloc::vec::Vec;
 
 #[inline(always)]

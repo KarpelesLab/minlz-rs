@@ -3,7 +3,6 @@
 
 use super::{compress, decompress, decompress_into, decompressed_len, MAX_BLOCK_SIZE};
 use crate::error::Error;
-use alloc::vec;
 use alloc::vec::Vec;
 
 fn roundtrip(data: &[u8]) {
@@ -29,6 +28,68 @@ fn roundtrips() {
     roundtrip(&[0u8; 1000]);
     let pattern: Vec<u8> = (0..4096).map(|i| (i * 31 % 256) as u8).collect();
     roundtrip(&pattern);
+}
+
+/// Small deterministic PRNG (xorshift64*) — keeps the stress test reproducible
+/// and dependency-free.
+struct Rng(u64);
+impl Rng {
+    fn next(&mut self) -> u64 {
+        let mut x = self.0;
+        x ^= x >> 12;
+        x ^= x << 25;
+        x ^= x >> 27;
+        self.0 = x;
+        x.wrapping_mul(0x2545_F491_4F6C_DD1D)
+    }
+    fn below(&mut self, n: usize) -> usize {
+        (self.next() % n as u64) as usize
+    }
+}
+
+/// Build inputs that stress copy offset/length boundaries: periodic data at
+/// telling periods, RLE runs, random noise, and concatenations.
+fn craft(rng: &mut Rng, kind: usize) -> Vec<u8> {
+    match kind % 5 {
+        0 => (0..rng.below(900)).map(|_| rng.next() as u8).collect(),
+        1 => {
+            // Periodic -> forces matches at a chosen offset.
+            let periods = [1, 2, 3, 17, 63, 64, 65, 255, 256, 1023, 1024, 1025, 4096];
+            let p = periods[rng.below(periods.len())];
+            let chunk: Vec<u8> = (0..p).map(|_| rng.next() as u8).collect();
+            let n = p + rng.below(p * 3 + 300);
+            (0..n).map(|i| chunk[i % p]).collect()
+        }
+        2 => {
+            // Match-length boundaries around 18 / 64 / 273.
+            let lens = [4, 17, 18, 19, 63, 64, 65, 272, 273, 274, 600];
+            let l = lens[rng.below(lens.len())];
+            let unit: Vec<u8> = (0..4 + rng.below(36)).map(|_| rng.next() as u8).collect();
+            let body: Vec<u8> = (0..l).map(|i| unit[i % unit.len()]).collect();
+            let pre: Vec<u8> = (0..rng.below(40)).map(|_| rng.next() as u8).collect();
+            [pre.clone(), body.clone(), body, pre].concat()
+        }
+        3 => vec![rng.next() as u8; 1 + rng.below(5000)],
+        _ => {
+            // Long-distance duplicate -> copy3 (offset >= 65536).
+            let head: Vec<u8> = (0..10 + rng.below(2000)).map(|_| rng.next() as u8).collect();
+            let gap = vec![0u8; 66000 + rng.below(8000)];
+            [head.clone(), gap, head].concat()
+        }
+    }
+}
+
+#[test]
+fn roundtrip_stress() {
+    let mut rng = Rng(0x1234_5678_9abc_def0);
+    for i in 0..400 {
+        let data = craft(&mut rng, i);
+        let comp = compress(&data).expect("compress");
+        // Never larger than the documented bound.
+        assert!(comp.len() <= super::max_compressed_len(data.len()).unwrap());
+        let got = decompress(&comp).expect("decompress");
+        assert_eq!(got, data, "stress mismatch at iter {i}, len {}", data.len());
+    }
 }
 
 #[test]

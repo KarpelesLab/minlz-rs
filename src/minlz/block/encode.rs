@@ -1,14 +1,24 @@
 // Copyright 2024 Karpeles Lab Inc.
 // MinLZ block encoder. See ../mod.rs for licensing/attribution.
 //
-// NOTE: this is currently a correct but non-compressing encoder — it emits a
-// MinLZ "stored" (literals-only) block. A matching encoder replaces it in a
-// follow-up. The MinLZ spec leaves encoder output implementation-defined, so
-// any valid token stream the reference decoder accepts is conformant.
+// A self-contained greedy LZ encoder. The MinLZ spec leaves encoder output
+// implementation-defined — any token stream the reference decoder accepts is
+// conformant — so this does not attempt to match the reference encoder's bytes.
+// It uses a single hash table, a repeat (last-offset) fast path, and backward
+// + forward match extension, then emits the smallest applicable copy form.
 
-use super::MAX_BLOCK_SIZE;
+use super::{
+    MAX_BLOCK_SIZE, MAX_COPY1_LENGTH, MAX_COPY1_OFFSET, MAX_COPY2_OFFSET, MAX_COPY3_OFFSET,
+    MIN_COPY2_OFFSET, MIN_COPY3_OFFSET,
+};
 use crate::error::{Error, Result};
+use crate::varint::{encode_varint, varint_size};
 use alloc::vec::Vec;
+
+/// Below this size, matching rarely pays for its overhead; store instead.
+const MIN_NON_LITERAL_BLOCK_SIZE: usize = 16;
+/// The match loop reads 4-byte words at `s`; keep that in bounds.
+const INPUT_MARGIN: usize = 4;
 
 /// Maximum number of bytes [`compress`] can produce for `src_len` input bytes,
 /// or `None` if `src_len` exceeds [`MAX_BLOCK_SIZE`].
@@ -19,7 +29,7 @@ pub fn max_compressed_len(src_len: usize) -> Option<usize> {
     if src_len == 0 {
         return Some(1);
     }
-    // Indicator byte + a zero length varint + the literals.
+    // Worst case is a stored block: indicator + zero-length varint + literals.
     Some(src_len + 2)
 }
 
@@ -31,15 +41,265 @@ pub fn compress(src: &[u8]) -> Result<Vec<u8>> {
     if src.len() > MAX_BLOCK_SIZE {
         return Err(Error::TooLarge);
     }
-    // The empty block is a single zero indicator byte.
     if src.is_empty() {
-        return Ok(alloc::vec![0u8]);
+        return Ok(vec![0u8]);
     }
-    // Stored block: indicator 0x00, uncompressed length 0 (one varint byte),
-    // then the raw bytes as literals.
+
+    if src.len() >= MIN_NON_LITERAL_BLOCK_SIZE {
+        let header = 1 + varint_size(src.len() as u64);
+        let mut out = Vec::with_capacity(src.len());
+        out.push(0u8);
+        let mut lenbuf = [0u8; 10];
+        let n = encode_varint(&mut lenbuf, src.len() as u64);
+        out.extend_from_slice(&lenbuf[..n]);
+        debug_assert_eq!(out.len(), header);
+
+        encode_block(&mut out, src);
+
+        // The decoder requires a compressed block to be no larger than its
+        // output. Keep it only if it actually saved space; otherwise store.
+        if out.len() - header < src.len() {
+            return Ok(out);
+        }
+    }
+
+    Ok(store(src))
+}
+
+/// Encode `src` as a stored (literals-only) block: `0x00 0x00 <literals>`.
+fn store(src: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(src.len() + 2);
     out.push(0);
     out.push(0);
     out.extend_from_slice(src);
-    Ok(out)
+    out
+}
+
+#[inline(always)]
+fn load32(src: &[u8], i: usize) -> u32 {
+    u32::from_le_bytes([src[i], src[i + 1], src[i + 2], src[i + 3]])
+}
+
+#[inline(always)]
+fn hash4(v: u32, bits: u32) -> usize {
+    (v.wrapping_mul(0x9E37_79B1) >> (32 - bits)) as usize
+}
+
+/// Hash-table size (log2) chosen from the input length.
+fn table_bits(n: usize) -> u32 {
+    let mut bits = 9;
+    while (1usize << bits) < n && bits < 17 {
+        bits += 1;
+    }
+    bits
+}
+
+/// Greedy match loop. Appends a complete MinLZ token stream for `src` to `out`.
+fn encode_block(out: &mut Vec<u8>, src: &[u8]) {
+    let n = src.len();
+    let bits = table_bits(n);
+    let mut table = vec![u32::MAX; 1usize << bits];
+
+    let s_limit = n - INPUT_MARGIN;
+    let mut next_emit = 0usize;
+    let mut last_offset = 1usize;
+    // Start at 1 so a repeat check always has a prior byte to look back at.
+    let mut s = 1usize;
+
+    while s <= s_limit {
+        // Repeat (last-offset) fast path: cheap and very effective on
+        // repetitive data.
+        if s >= last_offset && load32(src, s) == load32(src, s - last_offset) {
+            let cand = s - last_offset;
+            let (start, len) = extend(src, s, cand, next_emit);
+            emit_literals(out, &src[next_emit..start]);
+            emit_repeat(out, len);
+            s = start + len;
+            next_emit = s;
+            continue;
+        }
+
+        let cv = load32(src, s);
+        let h = hash4(cv, bits);
+        let cand = table[h];
+        table[h] = s as u32;
+
+        let usable = cand != u32::MAX && {
+            let c = cand as usize;
+            let off = s - c;
+            off <= MAX_COPY3_OFFSET && load32(src, c) == cv
+        };
+        if !usable {
+            // No match: advance, skipping faster the longer we go unmatched.
+            s += ((s - next_emit) >> 5) + 1;
+            continue;
+        }
+
+        let cand = cand as usize;
+        // Offset is invariant under the (symmetric) backward extension below.
+        let offset = s - cand;
+        let (start, len) = extend(src, s, cand, next_emit);
+        emit_literals(out, &src[next_emit..start]);
+        emit_copy(out, offset, len, &mut last_offset);
+        s = start + len;
+        next_emit = s;
+    }
+
+    // Trailing literals.
+    if next_emit < n {
+        emit_literals(out, &src[next_emit..n]);
+    }
+}
+
+/// Extend a 4-byte match at `(s, cand)` backwards (not past `next_emit`) and
+/// forwards. Returns the match start in `src` and its length.
+fn extend(src: &[u8], mut s: usize, mut cand: usize, next_emit: usize) -> (usize, usize) {
+    let n = src.len();
+    while s > next_emit && cand > 0 && src[s - 1] == src[cand - 1] {
+        s -= 1;
+        cand -= 1;
+    }
+    let mut len = 0usize;
+    while s + len < n && src[cand + len] == src[s + len] {
+        len += 1;
+    }
+    (s, len)
+}
+
+/// Emit a run of literals (`lits` may be empty, in which case nothing is done).
+fn emit_literals(out: &mut Vec<u8>, lits: &[u8]) {
+    let n = lits.len();
+    if n == 0 {
+        return;
+    }
+    emit_length_tag(out, 0, n);
+    out.extend_from_slice(lits);
+}
+
+/// Emit a repeat (copy from the last offset) of `length` bytes.
+fn emit_repeat(out: &mut Vec<u8>, length: usize) {
+    // Tag bit 2 set selects repeat.
+    emit_length_tag(out, 0b100, length);
+}
+
+/// Emit a tag-0 byte (literal or repeat) carrying `length`, with `flags` ORed
+/// into the low bits. Shared by literals and repeats (identical length codes).
+fn emit_length_tag(out: &mut Vec<u8>, flags: u8, length: usize) {
+    debug_assert!(length >= 1);
+    if length <= 29 {
+        out.push(flags | (((length - 1) as u8) << 3));
+    } else {
+        let m = length - 30;
+        if m <= 0xff {
+            out.push(flags | (29 << 3));
+            out.push(m as u8);
+        } else if m <= 0xffff {
+            out.push(flags | (30 << 3));
+            out.push(m as u8);
+            out.push((m >> 8) as u8);
+        } else {
+            out.push(flags | (31 << 3));
+            out.push(m as u8);
+            out.push((m >> 8) as u8);
+            out.push((m >> 16) as u8);
+        }
+    }
+}
+
+/// Emit a copy of `length` bytes at `offset`, choosing the smallest form and
+/// updating `last_offset`.
+fn emit_copy(out: &mut Vec<u8>, offset: usize, length: usize, last_offset: &mut usize) {
+    debug_assert!(length >= 4);
+    debug_assert!((1..=MAX_COPY3_OFFSET).contains(&offset));
+
+    if offset <= MAX_COPY1_OFFSET && length <= MAX_COPY1_LENGTH {
+        emit_copy1(out, offset, length);
+    } else if offset < MIN_COPY2_OFFSET {
+        // Small offset (< Copy2's minimum), long match: Copy1 cannot reach
+        // Copy2's offset range, so emit a max-length Copy1 then continue with
+        // a repeat for the remainder.
+        emit_copy1(out, offset, MAX_COPY1_LENGTH);
+        *last_offset = offset;
+        emit_repeat(out, length - MAX_COPY1_LENGTH);
+        return;
+    } else if offset <= MAX_COPY2_OFFSET {
+        emit_copy2(out, offset, length);
+    } else {
+        debug_assert!(offset >= MIN_COPY3_OFFSET);
+        emit_copy3(out, offset, length);
+    }
+    *last_offset = offset;
+}
+
+fn emit_copy1(out: &mut Vec<u8>, offset: usize, length: usize) {
+    debug_assert!((1..=MAX_COPY1_OFFSET).contains(&offset));
+    debug_assert!((4..=MAX_COPY1_LENGTH).contains(&length));
+    let stored = (offset - 1) as u16; // 10-bit offset
+    let lo2 = (stored & 3) as u8;
+    let hi = (stored >> 2) as u8;
+    if length <= 18 {
+        out.push(1 | (((length - 4) as u8) << 2) | (lo2 << 6));
+        out.push(hi);
+    } else {
+        out.push(1 | (15 << 2) | (lo2 << 6));
+        out.push(hi);
+        out.push((length - 18) as u8);
+    }
+}
+
+fn emit_copy2(out: &mut Vec<u8>, offset: usize, length: usize) {
+    debug_assert!((MIN_COPY2_OFFSET..=MAX_COPY2_OFFSET).contains(&offset));
+    debug_assert!(length >= 4);
+    let stored = (offset - MIN_COPY2_OFFSET) as u16;
+    let off_lo = stored as u8;
+    let off_hi = (stored >> 8) as u8;
+    if length <= 64 {
+        out.push(2 | (((length - 4) as u8) << 2));
+        out.push(off_lo);
+        out.push(off_hi);
+    } else {
+        let m = length - 64;
+        let lc = if m <= 0xff {
+            61
+        } else if m <= 0xffff {
+            62
+        } else {
+            63
+        };
+        out.push(2 | (lc << 2));
+        out.push(off_lo);
+        out.push(off_hi);
+        push_extra(out, m, (lc - 60) as usize);
+    }
+}
+
+fn emit_copy3(out: &mut Vec<u8>, offset: usize, length: usize) {
+    debug_assert!((MIN_COPY3_OFFSET..=MAX_COPY3_OFFSET).contains(&offset));
+    debug_assert!(length >= 4);
+    let stored = (offset - MIN_COPY3_OFFSET) as u32; // 21-bit offset
+    let (lc, extra) = if length <= 64 {
+        ((length - 4) as u32, 0usize)
+    } else {
+        let m = length - 64;
+        if m <= 0xff {
+            (61, 1)
+        } else if m <= 0xffff {
+            (62, 2)
+        } else {
+            (63, 3)
+        }
+    };
+    // val: tag=3, copy3 bit (1<<2), litLen=0, length code <<5, offset <<11.
+    let val: u32 = 0x07 | (lc << 5) | (stored << 11);
+    out.extend_from_slice(&val.to_le_bytes());
+    if extra > 0 {
+        push_extra(out, length - 64, extra);
+    }
+}
+
+/// Append the low `count` bytes of `m` in little-endian order.
+fn push_extra(out: &mut Vec<u8>, m: usize, count: usize) {
+    for i in 0..count {
+        out.push((m >> (8 * i)) as u8);
+    }
 }
