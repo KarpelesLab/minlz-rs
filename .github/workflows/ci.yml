@@ -173,11 +173,17 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
-      # The test harness itself needs std, so a no-default-features run can only
-      # build the library (block API). The dedicated `no-std` job below proves it
-      # links on a bare-metal target.
-      - name: Build with no default features
-        run: cargo build --no-default-features --verbose
+      # The test harness needs std, so no-default-features runs only build. Each
+      # codec is exercised on its own; the dedicated `no-std` job below proves
+      # they link on a bare-metal target.
+      - name: Build S2 only (no std)
+        run: cargo build --no-default-features --features s2 --verbose
+
+      - name: Build MinLZ only (no std)
+        run: cargo build --no-default-features --features minlz --verbose
+
+      - name: Build both codecs with std
+        run: cargo build --no-default-features --features std,s2,minlz --verbose
 
       - name: Test with all features
         run: cargo test --all-features --verbose
@@ -194,5 +200,8 @@ jobs:
         with:
           targets: thumbv7em-none-eabi
 
-      - name: Build library for thumbv7em-none-eabi (no_std + alloc)
-        run: cargo build --lib --no-default-features --target thumbv7em-none-eabi --verbose
+      - name: Build S2 (no_std + alloc) for thumbv7em-none-eabi
+        run: cargo build --lib --no-default-features --features s2 --target thumbv7em-none-eabi --verbose
+
+      - name: Build MinLZ (no_std + alloc) for thumbv7em-none-eabi
+        run: cargo build --lib --no-default-features --features minlz --target thumbv7em-none-eabi --verbose
