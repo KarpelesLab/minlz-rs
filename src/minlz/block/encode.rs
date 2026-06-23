@@ -186,6 +186,90 @@ fn encode_block_greedy(out: &mut Vec<u8>, src: &[u8]) {
     }
 }
 
+/// Compress `src` against a dictionary `prefix`, returning a dictionary block
+/// body `[uvarint(src.len())][tokens]` (no indicator byte). Backreferences may
+/// reach into the prefix. The decoder must supply the same prefix.
+pub(crate) fn compress_body_dict(src: &[u8], prefix: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(src.len() / 2 + 16);
+    let mut lenbuf = [0u8; 10];
+    let n = encode_varint(&mut lenbuf, src.len() as u64);
+    out.extend_from_slice(&lenbuf[..n]);
+
+    if src.is_empty() {
+        return out;
+    }
+    if src.len() < MIN_NON_LITERAL_BLOCK_SIZE {
+        emit_literals(&mut out, src);
+        return out;
+    }
+
+    // Work over `prefix || src`; emit only the `src` portion.
+    let mut combined = Vec::with_capacity(prefix.len() + src.len());
+    combined.extend_from_slice(prefix);
+    combined.extend_from_slice(src);
+    encode_block_prefixed(&mut out, &combined, prefix.len());
+    out
+}
+
+/// Greedy matcher over `combined`, emitting tokens for `combined[prefix..]`.
+/// Positions in the prefix are seeded into the hash table so matches can point
+/// into the dictionary.
+fn encode_block_prefixed(out: &mut Vec<u8>, combined: &[u8], prefix: usize) {
+    let n = combined.len();
+    let bits = table_bits(n);
+    let mut table = vec![u32::MAX; 1usize << bits];
+
+    // Seed the dictionary positions.
+    let seed_end = prefix.saturating_sub(INPUT_MARGIN);
+    for p in 0..seed_end {
+        table[hash4(load32(combined, p), bits)] = p as u32;
+    }
+
+    let s_limit = n - INPUT_MARGIN;
+    let mut next_emit = prefix;
+    let mut last_offset = 1usize;
+    let mut s = prefix.max(1);
+
+    while s <= s_limit {
+        if s >= last_offset && load32(combined, s) == load32(combined, s - last_offset) {
+            let cand = s - last_offset;
+            let (start, len) = extend(combined, s, cand, next_emit);
+            emit_literals(out, &combined[next_emit..start]);
+            emit_repeat(out, len);
+            s = start + len;
+            next_emit = s;
+            continue;
+        }
+
+        let cv = load32(combined, s);
+        let h = hash4(cv, bits);
+        let cand = table[h];
+        table[h] = s as u32;
+
+        let usable = cand != u32::MAX && {
+            let c = cand as usize;
+            let off = s - c;
+            off <= MAX_COPY3_OFFSET && load32(combined, c) == cv
+        };
+        if !usable {
+            s += ((s - next_emit) >> 5) + 1;
+            continue;
+        }
+
+        let cand = cand as usize;
+        let offset = s - cand;
+        let (start, len) = extend(combined, s, cand, next_emit);
+        emit_literals(out, &combined[next_emit..start]);
+        emit_copy(out, offset, len, &mut last_offset);
+        s = start + len;
+        next_emit = s;
+    }
+
+    if next_emit < n {
+        emit_literals(out, &combined[next_emit..n]);
+    }
+}
+
 /// Find the best match for position `s` by walking the hash chain up to
 /// `depth` links. Returns `(candidate, length)` of the longest match, or
 /// `None`. Prefers longer matches; on a tie prefers the smaller offset (which

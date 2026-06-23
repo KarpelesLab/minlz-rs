@@ -2,7 +2,8 @@
 // MinLZ block codec tests.
 
 use super::{
-    compress, compress_level, decompress, decompress_into, decompressed_len, Level, MAX_BLOCK_SIZE,
+    compress, compress_level, compress_with_dict, decompress, decompress_into,
+    decompress_with_dict, decompressed_len, Dict, Level, MAX_BLOCK_SIZE,
 };
 use crate::error::Error;
 use alloc::vec::Vec;
@@ -107,6 +108,52 @@ fn all_levels_roundtrip() {
             );
         }
     }
+}
+
+#[test]
+fn dict_roundtrip() {
+    let dict = Dict::new(b"the quick brown fox jumps over the lazy dog, repeatedly and often. ");
+    let mut rng = Rng(0xd1c7_0000_1234_5678);
+    for kind in 0..30 {
+        let data = craft(&mut rng, kind);
+        let comp = compress_with_dict(&data, &dict).expect("compress_with_dict");
+        let got = decompress_with_dict(&comp, &dict).expect("decompress_with_dict");
+        assert_eq!(got, data, "dict roundtrip mismatch, len {}", data.len());
+    }
+}
+
+#[test]
+fn dict_helps_similar_data() {
+    // A block very similar to the dictionary should compress much better with
+    // the dictionary than without.
+    let base = b"GET /api/v1/users/12345/profile HTTP/1.1\r\nHost: example.com\r\n\r\n";
+    let dict = Dict::new(base);
+    let msg = b"GET /api/v1/users/67890/profile HTTP/1.1\r\nHost: example.com\r\n\r\n";
+
+    let with = compress_with_dict(msg, &dict).unwrap();
+    let without = compress(msg).unwrap();
+    assert_eq!(decompress_with_dict(&with, &dict).unwrap(), msg);
+    assert!(
+        with.len() < without.len(),
+        "dict ({}) should beat no-dict ({})",
+        with.len(),
+        without.len()
+    );
+}
+
+#[test]
+fn dict_empty_and_edge() {
+    let dict = Dict::new(b"some shared dictionary context bytes here");
+    for data in [&b""[..], b"x", b"short", &[0u8; 500][..]] {
+        let comp = compress_with_dict(data, &dict).unwrap();
+        assert_eq!(decompress_with_dict(&comp, &dict).unwrap(), data);
+    }
+    // An empty dictionary behaves like ordinary (indicator-less) compression.
+    let empty = Dict::new(b"");
+    assert!(empty.is_empty());
+    let data = b"hello hello hello hello world world world";
+    let comp = compress_with_dict(data, &empty).unwrap();
+    assert_eq!(decompress_with_dict(&comp, &empty).unwrap(), data);
 }
 
 #[test]

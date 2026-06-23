@@ -173,12 +173,34 @@ pub(crate) fn decompress_body(body: &[u8], max_block: usize) -> Result<Vec<u8>> 
     Ok(dst)
 }
 
+/// Decompress a dictionary block body `[uvarint(len)][tokens]` (no indicator)
+/// against `prefix`, returning the original bytes.
+pub(crate) fn decompress_with_prefix(block: &[u8], prefix: &[u8]) -> Result<Vec<u8>> {
+    let (v, hlen) = decode_varint(block)?;
+    if v > MAX_BLOCK_SIZE as u64 {
+        return Err(Error::TooLarge);
+    }
+    let n = v as usize;
+    let tokens = &block[hlen..];
+    let mut dst = vec![0u8; prefix.len() + n];
+    dst[..prefix.len()].copy_from_slice(prefix);
+    decode_block_from(&mut dst, tokens, prefix.len())?;
+    Ok(dst[prefix.len()..].to_vec())
+}
+
 /// Decode a MinLZ token stream into `dst`, which must already be sized to the
 /// exact decompressed length. Mirrors `minLZDecodeGo`.
 fn decode_block(dst: &mut [u8], src: &[u8]) -> Result<()> {
+    decode_block_from(dst, src, 0)
+}
+
+/// Decode a MinLZ token stream into `dst[d_start..]`, with `dst[..d_start]`
+/// pre-filled (a dictionary prefix). Backreferences may reach into the prefix.
+/// On success `d` reaches `dst.len()`.
+pub(crate) fn decode_block_from(dst: &mut [u8], src: &[u8], d_start: usize) -> Result<()> {
     let dlen = dst.len();
     let slen = src.len();
-    let mut d = 0usize;
+    let mut d = d_start;
     let mut s = 0usize;
     let mut offset: usize = 1;
 

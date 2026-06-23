@@ -12,6 +12,62 @@ mod encode;
 pub use decode::{decompress, decompress_into, decompressed_len};
 pub use encode::{compress, compress_level, max_compressed_len};
 
+use crate::error::{Error, Result};
+use alloc::vec::Vec;
+
+/// Maximum dictionary window size: the most recent 64 KiB are used.
+pub const MAX_DICT_SIZE: usize = 65536;
+
+/// A compression dictionary — shared context that primes the encoder and
+/// decoder so small, similar blocks compress better.
+///
+/// **Crate-local format.** MinLZ's block dictionary format is unspecified (the
+/// spec marks it "TBD" and the reference exposes no public dictionary API), so
+/// [`compress_with_dict`]/[`decompress_with_dict`] are interoperable only with
+/// this crate, not with `github.com/minio/minlz`. The same `Dict` must be used
+/// to compress and decompress.
+#[derive(Debug, Clone, Default)]
+pub struct Dict {
+    window: Vec<u8>,
+}
+
+impl Dict {
+    /// Build a dictionary from `data`. Only the most recent [`MAX_DICT_SIZE`]
+    /// bytes are retained.
+    pub fn new(data: &[u8]) -> Self {
+        let start = data.len().saturating_sub(MAX_DICT_SIZE);
+        Dict {
+            window: data[start..].to_vec(),
+        }
+    }
+
+    /// The dictionary window length in bytes.
+    pub fn len(&self) -> usize {
+        self.window.len()
+    }
+
+    /// Whether the dictionary is empty.
+    pub fn is_empty(&self) -> bool {
+        self.window.is_empty()
+    }
+}
+
+/// Compress `src` using `dict` as shared context. Produces a crate-local
+/// dictionary block (see [`Dict`]); decode it with [`decompress_with_dict`] and
+/// the same dictionary.
+pub fn compress_with_dict(src: &[u8], dict: &Dict) -> Result<Vec<u8>> {
+    if src.len() > MAX_BLOCK_SIZE {
+        return Err(Error::TooLarge);
+    }
+    Ok(encode::compress_body_dict(src, &dict.window))
+}
+
+/// Decompress a dictionary block produced by [`compress_with_dict`] using the
+/// same `dict`.
+pub fn decompress_with_dict(block: &[u8], dict: &Dict) -> Result<Vec<u8>> {
+    decode::decompress_with_prefix(block, &dict.window)
+}
+
 // Indicator-less block helpers used by the stream format (chunk type 0x02).
 #[cfg(feature = "std")]
 pub(crate) use decode::decompress_body;
