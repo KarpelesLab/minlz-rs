@@ -80,6 +80,45 @@ fn rejects_truncated_crc() {
 }
 
 #[test]
+fn index_seek_multiblock() {
+    use crate::minlz::{seek_decompress, Index};
+
+    // Several blocks worth of compressible data (block size is 1 MiB).
+    let data: Vec<u8> = (0..3_000_000u32).map(|i| (i / 5) as u8).collect();
+    let mut w = Writer::new(Vec::new()).with_index();
+    w.write_all(&data).unwrap();
+    let stream = w.finish().unwrap();
+
+    let index = Index::load(&stream).expect("load index");
+    assert!(index.len() >= 2, "expected multiple index entries");
+    assert_eq!(index.total_uncompressed(), data.len() as u64);
+
+    // A plain reader still reads the whole thing (index chunk is skippable).
+    let mut whole = Vec::new();
+    Reader::new(&stream[..]).read_to_end(&mut whole).unwrap();
+    assert_eq!(whole, data);
+
+    for &off in &[0u64, 1, 999_999, 1_048_576, 1_500_000, 2_999_999] {
+        let got = seek_decompress(&stream, &index, off).unwrap();
+        assert_eq!(got, &data[off as usize..], "seek to {off}");
+    }
+}
+
+#[test]
+fn index_roundtrip_encode_decode() {
+    use crate::minlz::Index;
+    let data: Vec<u8> = (0..2_500_000u32).map(|i| (i / 3) as u8).collect();
+    let mut w = Writer::new(Vec::new()).with_index();
+    w.write_all(&data).unwrap();
+    let stream = w.finish().unwrap();
+
+    let index = Index::load(&stream).unwrap();
+    // find() at an exact block boundary returns that boundary.
+    let (_c, u) = index.find(1_048_576);
+    assert!(u <= 1_048_576);
+}
+
+#[test]
 fn concatenated_streams() {
     let mut a = Writer::new(Vec::new());
     a.write_all(b"first stream ").unwrap();

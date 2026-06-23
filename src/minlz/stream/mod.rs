@@ -15,6 +15,65 @@ mod writer;
 pub use reader::Reader;
 pub use writer::Writer;
 
+use crate::minlz::{Index, MAX_BLOCK_SIZE};
+use alloc::vec::Vec;
+use std::io::{self, Read};
+
+/// Decompress a complete MinLZ stream starting at uncompressed byte
+/// `uncompressed_offset`, using `index` to seek directly to the containing
+/// block rather than decoding from the start.
+///
+/// `stream` must be the entire stream bytes. Returns everything from
+/// `uncompressed_offset` to the end of the stream.
+///
+/// ```
+/// use std::io::Write;
+/// let data: Vec<u8> = (0..200_000u32).map(|i| (i / 7) as u8).collect();
+/// let mut w = minlz::minlz::Writer::new(Vec::new()).with_index();
+/// w.write_all(&data).unwrap();
+/// let stream = w.finish().unwrap();
+///
+/// let index = minlz::minlz::Index::load(&stream).unwrap();
+/// let tail = minlz::minlz::seek_decompress(&stream, &index, 150_000).unwrap();
+/// assert_eq!(tail, &data[150_000..]);
+/// ```
+pub fn seek_decompress(
+    stream: &[u8],
+    index: &Index,
+    uncompressed_offset: u64,
+) -> io::Result<Vec<u8>> {
+    // Recover the block size from the stream header (10-byte identifier).
+    let max_block = if stream.len() >= 10 && stream[0] == CHUNK_STREAM_ID {
+        let indicator = (stream[9] & 0x0f) as u32;
+        (1usize << (indicator + 10)).min(MAX_BLOCK_SIZE)
+    } else {
+        MAX_BLOCK_SIZE
+    };
+
+    let (comp_off, block_uoff) = index.find(uncompressed_offset);
+    let comp_off = comp_off as usize;
+    if comp_off > stream.len() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "index offset past end of stream",
+        ));
+    }
+
+    let mut out = Vec::new();
+    Reader::new_midstream(&stream[comp_off..], max_block).read_to_end(&mut out)?;
+
+    // Drop the bytes between the block boundary and the requested offset.
+    let skip = (uncompressed_offset - block_uoff) as usize;
+    if skip > out.len() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "offset past decoded data",
+        ));
+    }
+    out.drain(..skip);
+    Ok(out)
+}
+
 /// Stream identifier chunk prefix: type `0xff`, length 6, body `"MinLz"`.
 /// One block-size indicator byte follows to complete the 10-byte header.
 pub(crate) const STREAM_MAGIC: &[u8] = b"\xff\x06\x00\x00MinLz";

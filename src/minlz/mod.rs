@@ -36,13 +36,15 @@
 //! ```
 
 mod block;
+mod index;
 
 pub use block::{
     compress, compress_level, decompress, decompress_into, decompressed_len, max_compressed_len,
     Level, MAX_BLOCK_SIZE,
 };
+pub use index::Index;
 
 #[cfg(feature = "std")]
 mod stream;
 #[cfg(feature = "std")]
-pub use stream::{Reader, Writer};
+pub use stream::{seek_decompress, Reader, Writer};

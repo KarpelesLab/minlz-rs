@@ -30,6 +30,9 @@ pub struct Reader<R: Read> {
     /// Uncompressed bytes decoded since the current stream identifier (for EOF
     /// length validation).
     uncompressed_in_stream: u64,
+    /// Validate the EOF chunk's total-size field. Disabled when starting
+    /// mid-stream (after a seek), where the count is partial.
+    validate_eof: bool,
     done: bool,
 }
 
@@ -43,6 +46,24 @@ impl<R: Read> Reader<R> {
             max_block: MAX_BLOCK_SIZE,
             saw_header: false,
             uncompressed_in_stream: 0,
+            validate_eof: true,
+            done: false,
+        }
+    }
+
+    /// Create a reader positioned at a block boundary mid-stream (used for
+    /// seeking via an [`Index`](crate::minlz::Index)). The stream header has
+    /// already been parsed elsewhere, so `max_block` is supplied and EOF size
+    /// validation is skipped.
+    pub(crate) fn new_midstream(r: R, max_block: usize) -> Self {
+        Reader {
+            r,
+            decoded: Vec::new(),
+            pos: 0,
+            max_block,
+            saw_header: true,
+            uncompressed_in_stream: 0,
+            validate_eof: false,
             done: false,
         }
     }
@@ -117,10 +138,12 @@ impl<R: Read> Reader<R> {
             let ctype = hdr[0];
             let clen = hdr[1] as usize | (hdr[2] as usize) << 8 | (hdr[3] as usize) << 16;
 
-            // The first chunk must be the stream identifier, except a lone EOF
-            // chunk denotes an empty stream (spec §4.6).
-            if !self.saw_header && ctype != CHUNK_STREAM_ID && ctype != CHUNK_EOF {
-                return Err(corrupt("stream does not start with a MinLZ identifier"));
+            // Before a stream identifier, a (non-skippable) data chunk is
+            // invalid — but skippable chunks (index, padding) and a lone EOF
+            // (an empty stream, spec §4.6) are fine. The stream identifier and
+            // skippable chunks are all > MAX_NON_SKIPPABLE_CHUNK.
+            if !self.saw_header && ctype <= MAX_NON_SKIPPABLE_CHUNK && ctype != CHUNK_EOF {
+                return Err(corrupt("data chunk before stream identifier"));
             }
 
             match ctype {
@@ -172,7 +195,7 @@ impl<R: Read> Reader<R> {
                         if n != clen {
                             return Err(corrupt("EOF length mismatch"));
                         }
-                        if want != self.uncompressed_in_stream {
+                        if self.validate_eof && want != self.uncompressed_in_stream {
                             return Err(corrupt("EOF size does not match decoded length"));
                         }
                     }

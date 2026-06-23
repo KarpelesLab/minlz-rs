@@ -7,6 +7,7 @@ use super::{
 };
 use crate::crc::crc;
 use crate::minlz::block::compress_body;
+use crate::minlz::index::Index;
 use crate::minlz::Level;
 use alloc::vec::Vec;
 use std::io::{self, Write};
@@ -36,6 +37,10 @@ pub struct Writer<W: Write> {
     ibuf: Vec<u8>,
     wrote_header: bool,
     uncompressed_written: u64,
+    /// Compressed bytes written to the inner writer (for index offsets).
+    compressed_written: u64,
+    /// Index being built, if requested via [`Writer::with_index`].
+    index: Option<Index>,
     finished: bool,
     /// Sticky error: once writing fails, every later call returns it.
     err: Option<io::ErrorKind>,
@@ -56,9 +61,29 @@ impl<W: Write> Writer<W> {
             ibuf: Vec::with_capacity(DEFAULT_BLOCK_SIZE),
             wrote_header: false,
             uncompressed_written: 0,
+            compressed_written: 0,
+            index: None,
             finished: false,
             err: None,
         }
+    }
+
+    /// Enable building and appending a seek [`Index`](crate::minlz::Index) to
+    /// the end of the stream (after the end-of-stream marker). The index is a
+    /// skippable chunk, so plain readers ignore it.
+    pub fn with_index(mut self) -> Self {
+        self.index = Some(Index::new(self.block_size as u64));
+        self
+    }
+
+    /// Write `b` to the inner writer, counting the bytes for index offsets.
+    fn write_raw(&mut self, b: &[u8]) -> io::Result<()> {
+        self.inner
+            .as_mut()
+            .ok_or_else(|| io::Error::other("minlz writer already finished"))?
+            .write_all(b)?;
+        self.compressed_written += b.len() as u64;
+        Ok(())
     }
 
     fn header() -> [u8; 10] {
@@ -85,7 +110,7 @@ impl<W: Write> Writer<W> {
     fn write_header_if_needed(&mut self) -> io::Result<()> {
         if !self.wrote_header {
             let hdr = Self::header();
-            self.w()?.write_all(&hdr)?;
+            self.write_raw(&hdr)?;
             self.wrote_header = true;
         }
         Ok(())
@@ -96,6 +121,10 @@ impl<W: Write> Writer<W> {
     fn write_block(&mut self, block: &[u8]) -> io::Result<()> {
         debug_assert!(!block.is_empty() && block.len() <= self.block_size);
         self.write_header_if_needed()?;
+        // Record this block's start offsets for the index (before writing it).
+        if let Some(index) = &mut self.index {
+            index.push(self.compressed_written, self.uncompressed_written);
+        }
         let checksum = crc(block);
 
         let body = compress_body(block, self.level);
@@ -117,9 +146,8 @@ impl<W: Write> Writer<W> {
         hdr[2] = (chunk_len >> 8) as u8;
         hdr[3] = (chunk_len >> 16) as u8;
         hdr[4..8].copy_from_slice(&checksum.to_le_bytes());
-        let w = self.w()?;
-        w.write_all(&hdr)?;
-        w.write_all(payload)?;
+        self.write_raw(&hdr)?;
+        self.write_raw(payload)?;
         self.uncompressed_written += block.len() as u64;
         Ok(())
     }
@@ -162,7 +190,18 @@ impl<W: Write> Writer<W> {
             }
         }
         tmp[1] = n as u8; // 3-byte length; n <= 10 fits in one byte
-        self.w()?.write_all(&tmp[..4 + n])
+        let len = 4 + n;
+        let bytes = tmp;
+        self.write_raw(&bytes[..len])
+    }
+
+    /// Append the seek index chunk after the end-of-stream marker.
+    fn write_index(&mut self) -> io::Result<()> {
+        if let Some(index) = self.index.take() {
+            let chunk = index.encode(self.uncompressed_written, self.compressed_written as i64);
+            self.write_raw(&chunk)?;
+        }
+        Ok(())
     }
 
     /// Flush the final block, write the end-of-stream marker, and return the
@@ -180,6 +219,7 @@ impl<W: Write> Writer<W> {
         self.finished = true;
         self.flush_buffer()?;
         self.write_eof()?;
+        self.write_index()?;
         self.w()?.flush()
     }
 
