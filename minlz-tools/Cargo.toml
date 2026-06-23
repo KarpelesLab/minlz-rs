@@ -3,7 +3,7 @@ name = "minlz-tools"
 version = "1.1.0"
 edition = "2021"
 authors = ["Karpeles Lab Inc."]
-description = "Command-line tools for S2 compression"
+description = "Command-line tools for S2 and MinLZ compression"
 license = "BSD-3-Clause"
 repository = "https://github.com/KarpelesLab/minlz-rs"
 
@@ -14,6 +14,14 @@ path = "src/bin/s2c.rs"
 [[bin]]
 name = "s2d"
 path = "src/bin/s2d.rs"
+
+[[bin]]
+name = "mzc"
+path = "src/bin/mzc.rs"
+
+[[bin]]
+name = "mzd"
+path = "src/bin/mzd.rs"
 
 [dependencies]
 minlz = { version = "1.1", path = "..", features = ["concurrent"] }
