@@ -1,14 +1,15 @@
 // Copyright 2024 Karpeles Lab Inc.
 // MinLZ block encoder. See ../mod.rs for licensing/attribution.
 //
-// A self-contained greedy LZ encoder. The MinLZ spec leaves encoder output
+// A self-contained LZ encoder. The MinLZ spec leaves encoder output
 // implementation-defined — any token stream the reference decoder accepts is
 // conformant — so this does not attempt to match the reference encoder's bytes.
-// It uses a single hash table, a repeat (last-offset) fast path, and backward
-// + forward match extension, then emits the smallest applicable copy form.
+// `Fastest` is a greedy single-table matcher; `Balanced`/`Smallest` add a
+// hash-chain search with lazy matching. All share the same (verified) token
+// emission and a repeat (last-offset) fast path.
 
 use super::{
-    MAX_BLOCK_SIZE, MAX_COPY1_LENGTH, MAX_COPY1_OFFSET, MAX_COPY2_OFFSET, MAX_COPY3_OFFSET,
+    Level, MAX_BLOCK_SIZE, MAX_COPY1_LENGTH, MAX_COPY1_OFFSET, MAX_COPY2_OFFSET, MAX_COPY3_OFFSET,
     MIN_COPY2_OFFSET, MIN_COPY3_OFFSET,
 };
 use crate::error::{Error, Result};
@@ -33,37 +34,71 @@ pub fn max_compressed_len(src_len: usize) -> Option<usize> {
     Some(src_len + 2)
 }
 
-/// Compress `src` into a single MinLZ block.
+/// Compress `src` into a single MinLZ block at the default ([`Level::Fastest`])
+/// level.
 ///
 /// Returns [`Error::TooLarge`] if `src` exceeds [`MAX_BLOCK_SIZE`]; larger
 /// inputs must be split across blocks (the streaming API does this).
 pub fn compress(src: &[u8]) -> Result<Vec<u8>> {
+    compress_level(src, Level::Fastest)
+}
+
+/// Compress `src` into a single MinLZ block at the given [`Level`].
+pub fn compress_level(src: &[u8], level: Level) -> Result<Vec<u8>> {
     if src.len() > MAX_BLOCK_SIZE {
         return Err(Error::TooLarge);
     }
     if src.is_empty() {
+        // Canonical empty block: a single zero indicator byte.
         return Ok(vec![0u8]);
     }
-
-    if src.len() >= MIN_NON_LITERAL_BLOCK_SIZE {
-        let header = 1 + varint_size(src.len() as u64);
-        let mut out = Vec::with_capacity(src.len());
+    if let Some(body) = compress_body(src, level) {
+        let mut out = Vec::with_capacity(body.len() + 1);
         out.push(0u8);
-        let mut lenbuf = [0u8; 10];
-        let n = encode_varint(&mut lenbuf, src.len() as u64);
-        out.extend_from_slice(&lenbuf[..n]);
-        debug_assert_eq!(out.len(), header);
+        out.extend_from_slice(&body);
+        return Ok(out);
+    }
+    Ok(store(src))
+}
 
-        encode_block(&mut out, src);
+/// Hash-chain depth and lazy-matching flag for a level.
+fn params(level: Level) -> (u32, bool) {
+    match level {
+        Level::Fastest => (1, false),
+        Level::Balanced => (8, true),
+        Level::Smallest => (64, true),
+    }
+}
 
-        // The decoder requires a compressed block to be no larger than its
-        // output. Keep it only if it actually saved space; otherwise store.
-        if out.len() - header < src.len() {
-            return Ok(out);
-        }
+/// Produce the *body* of a compressed MinLZ block — `[uvarint(len)][tokens]`,
+/// without the leading `0x00` indicator — but only if it is smaller than `src`.
+/// Returns `None` when matching does not save space (the caller stores instead).
+///
+/// This is also the form used inside the stream format (chunk type 0x02).
+pub(crate) fn compress_body(src: &[u8], level: Level) -> Option<Vec<u8>> {
+    if src.len() < MIN_NON_LITERAL_BLOCK_SIZE {
+        return None;
+    }
+    let header = varint_size(src.len() as u64);
+    let mut out = Vec::with_capacity(src.len());
+    let mut lenbuf = [0u8; 10];
+    let n = encode_varint(&mut lenbuf, src.len() as u64);
+    out.extend_from_slice(&lenbuf[..n]);
+    debug_assert_eq!(out.len(), header);
+
+    let (depth, lazy) = params(level);
+    if depth <= 1 {
+        encode_block_greedy(&mut out, src);
+    } else {
+        encode_block_chain(&mut out, src, depth, lazy);
     }
 
-    Ok(store(src))
+    // The decoder requires a compressed block to be no larger than its output.
+    if out.len() - header < src.len() {
+        Some(out)
+    } else {
+        None
+    }
 }
 
 /// Encode `src` as a stored (literals-only) block: `0x00 0x00 <literals>`.
@@ -95,7 +130,7 @@ fn table_bits(n: usize) -> u32 {
 }
 
 /// Greedy match loop. Appends a complete MinLZ token stream for `src` to `out`.
-fn encode_block(out: &mut Vec<u8>, src: &[u8]) {
+fn encode_block_greedy(out: &mut Vec<u8>, src: &[u8]) {
     let n = src.len();
     let bits = table_bits(n);
     let mut table = vec![u32::MAX; 1usize << bits];
@@ -146,6 +181,129 @@ fn encode_block(out: &mut Vec<u8>, src: &[u8]) {
     }
 
     // Trailing literals.
+    if next_emit < n {
+        emit_literals(out, &src[next_emit..n]);
+    }
+}
+
+/// Find the best match for position `s` by walking the hash chain up to
+/// `depth` links. Returns `(candidate, length)` of the longest match, or
+/// `None`. Prefers longer matches; on a tie prefers the smaller offset (which
+/// tends to encode in fewer bytes).
+#[allow(clippy::too_many_arguments)]
+fn best_match(
+    src: &[u8],
+    s: usize,
+    head: &[u32],
+    prev: &[u32],
+    bits: u32,
+    depth: u32,
+    next_emit: usize,
+) -> Option<(usize, usize)> {
+    let cv = load32(src, s);
+    let mut c = head[hash4(cv, bits)];
+    let mut best_len = 0usize;
+    let mut best_cand = 0usize;
+    let mut tries = depth;
+    while c != u32::MAX && tries > 0 {
+        let cand = c as usize;
+        if cand >= s {
+            // The just-inserted position(s) at/after `s`: not a backreference.
+            c = prev[cand];
+            continue;
+        }
+        let off = s - cand;
+        if off > MAX_COPY3_OFFSET {
+            break; // chain is ordered newest-first; everything older is farther
+        }
+        if load32(src, cand) == cv {
+            let (_, len) = extend(src, s, cand, next_emit);
+            if len > best_len || (len == best_len && off < s - best_cand) {
+                best_len = len;
+                best_cand = cand;
+            }
+        }
+        c = prev[cand];
+        tries -= 1;
+    }
+    if best_len >= 4 {
+        Some((best_cand, best_len))
+    } else {
+        None
+    }
+}
+
+/// Hash-chain match loop with optional one-step lazy matching.
+fn encode_block_chain(out: &mut Vec<u8>, src: &[u8], depth: u32, lazy: bool) {
+    let n = src.len();
+    let bits = table_bits(n);
+    let mut head = vec![u32::MAX; 1usize << bits];
+    let mut prev = vec![u32::MAX; n];
+
+    let insert = |head: &mut [u32], prev: &mut [u32], p: usize| {
+        let h = hash4(load32(src, p), bits);
+        prev[p] = head[h];
+        head[h] = p as u32;
+    };
+
+    let s_limit = n - INPUT_MARGIN;
+    let mut next_emit = 0usize;
+    let mut last_offset = 1usize;
+    let mut s = 1usize;
+    // Seed position 0 so it can be matched against.
+    insert(&mut head, &mut prev, 0);
+
+    while s <= s_limit {
+        // Repeat (last-offset) fast path.
+        if s >= last_offset && load32(src, s) == load32(src, s - last_offset) {
+            let cand = s - last_offset;
+            let (start, len) = extend(src, s, cand, next_emit);
+            emit_literals(out, &src[next_emit..start]);
+            emit_repeat(out, len);
+            for p in s..(start + len).min(s_limit + 1) {
+                insert(&mut head, &mut prev, p);
+            }
+            s = start + len;
+            next_emit = s;
+            continue;
+        }
+
+        insert(&mut head, &mut prev, s);
+        let m = best_match(src, s, &head, &prev, bits, depth, next_emit);
+        let (mut cand, mut len) = match m {
+            Some(v) => v,
+            None => {
+                s += ((s - next_emit) >> 5) + 1;
+                continue;
+            }
+        };
+
+        // Lazy matching: if inserting s+1 yields a strictly longer match, defer
+        // and take that one instead (emitting src[s] as a literal).
+        if lazy && s < s_limit {
+            insert(&mut head, &mut prev, s + 1);
+            if let Some((c2, l2)) = best_match(src, s + 1, &head, &prev, bits, depth, next_emit) {
+                if l2 > len {
+                    s += 1;
+                    cand = c2;
+                    len = l2;
+                }
+            }
+        }
+
+        let offset = s - cand;
+        let (start, mlen) = extend(src, s, cand, next_emit);
+        debug_assert_eq!(mlen, len);
+        emit_literals(out, &src[next_emit..start]);
+        emit_copy(out, offset, mlen, &mut last_offset);
+        // Insert positions covered by the match so later matches can find them.
+        for p in (s + 1)..(start + mlen).min(s_limit + 1) {
+            insert(&mut head, &mut prev, p);
+        }
+        s = start + mlen;
+        next_emit = s;
+    }
+
     if next_emit < n {
         emit_literals(out, &src[next_emit..n]);
     }

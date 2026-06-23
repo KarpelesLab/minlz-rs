@@ -1,7 +1,9 @@
 // Copyright 2024 Karpeles Lab Inc.
 // MinLZ block codec tests.
 
-use super::{compress, decompress, decompress_into, decompressed_len, MAX_BLOCK_SIZE};
+use super::{
+    compress, compress_level, decompress, decompress_into, decompressed_len, Level, MAX_BLOCK_SIZE,
+};
 use crate::error::Error;
 use alloc::vec::Vec;
 
@@ -72,9 +74,37 @@ fn craft(rng: &mut Rng, kind: usize) -> Vec<u8> {
         3 => vec![rng.next() as u8; 1 + rng.below(5000)],
         _ => {
             // Long-distance duplicate -> copy3 (offset >= 65536).
-            let head: Vec<u8> = (0..10 + rng.below(2000)).map(|_| rng.next() as u8).collect();
+            let head: Vec<u8> = (0..10 + rng.below(2000))
+                .map(|_| rng.next() as u8)
+                .collect();
             let gap = vec![0u8; 66000 + rng.below(8000)];
             [head.clone(), gap, head].concat()
+        }
+    }
+}
+
+#[test]
+fn all_levels_roundtrip() {
+    let mut rng = Rng(0xcafef00dd00dfeed);
+    for kind in 0..40 {
+        let data = craft(&mut rng, kind);
+        let mut sizes = Vec::new();
+        for level in [Level::Fastest, Level::Balanced, Level::Smallest] {
+            let comp = compress_level(&data, level).expect("compress");
+            let got = decompress(&comp).expect("decompress");
+            assert_eq!(got, data, "level {level:?} mismatch, len {}", data.len());
+            sizes.push(comp.len());
+        }
+        // Higher levels should never be dramatically worse than Fastest; on a
+        // clearly compressible input they should do at least as well.
+        if data.len() > 2000 && sizes[0] * 2 < data.len() {
+            assert!(
+                sizes[2] <= sizes[0],
+                "Smallest ({}) worse than Fastest ({}) on len {}",
+                sizes[2],
+                sizes[0],
+                data.len()
+            );
         }
     }
 }
@@ -122,6 +152,19 @@ fn rejects_corrupt() {
     assert_eq!(decompress(&[]), Err(Error::Corrupt));
     // Indicator + varint len but no token bytes.
     assert_eq!(decompress(&[0u8, 5u8]), Err(Error::Corrupt));
-    // Non-zero indicator -> Snappy/S2 fallback (unimplemented).
-    assert_eq!(decompress(&[1u8, 2u8, 3u8]), Err(Error::Unsupported));
+}
+
+#[cfg(feature = "s2")]
+#[test]
+fn snappy_s2_fallback() {
+    // A non-zero indicator byte means the block is actually an S2/Snappy block;
+    // the MinLZ decoder transparently falls back to the S2 decoder.
+    let data = b"fallback: an S2 block decoded through the MinLZ entry point";
+    let s2_block = crate::encode::encode(data);
+    assert_ne!(
+        s2_block[0], 0,
+        "S2 block should not start with a 0 indicator"
+    );
+    assert_eq!(decompress(&s2_block).unwrap(), data);
+    assert_eq!(decompressed_len(&s2_block).unwrap(), data.len());
 }

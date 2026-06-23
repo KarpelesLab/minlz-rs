@@ -10,7 +10,23 @@ mod decode;
 mod encode;
 
 pub use decode::{decompress, decompress_into, decompressed_len};
-pub use encode::{compress, max_compressed_len};
+pub use encode::{compress, compress_level, max_compressed_len};
+
+/// Compression level for the MinLZ encoder.
+///
+/// All levels produce valid MinLZ blocks; they trade encode time for ratio.
+/// (The decoder is the same regardless of level.)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Level {
+    /// Greedy single-table matching. Fastest, lowest ratio. Used by
+    /// [`compress`].
+    #[default]
+    Fastest,
+    /// Hash-chain search with lazy matching — better ratio, slower.
+    Balanced,
+    /// Deeper hash-chain search. Best ratio this encoder offers, slowest.
+    Smallest,
+}
 
 /// Maximum uncompressed size of a single MinLZ block: 8 MiB.
 pub const MAX_BLOCK_SIZE: usize = 8 << 20;

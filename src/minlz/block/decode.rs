@@ -33,20 +33,21 @@ enum Header<'a> {
     Literals(&'a [u8]),
     /// A compressed token stream decoding to `dlen` bytes.
     Compressed { dlen: usize, tokens: &'a [u8] },
+    /// A non-zero indicator byte: not a MinLZ block, decode as Snappy/S2.
+    Fallback(&'a [u8]),
 }
 
 /// Parse the MinLZ block header (indicator byte + uncompressed length varint).
 ///
-/// Snappy/S2 fallback (a non-zero indicator byte) is not implemented and is
-/// reported as [`Error::Unsupported`].
+/// A non-zero indicator byte selects seamless Snappy/S2 fallback (the block is
+/// an S2 or Snappy block); with the `s2` feature it is decoded by the S2
+/// decoder, otherwise it reports [`Error::Unsupported`].
 fn parse_header(src: &[u8]) -> Result<Header<'_>> {
     if src.is_empty() {
         return Err(Error::Corrupt);
     }
     if src[0] != 0 {
-        // Non-zero indicator selects seamless Snappy/S2 fallback, which this
-        // decoder does not (yet) implement.
-        return Err(Error::Unsupported);
+        return Ok(Header::Fallback(src));
     }
     let src = &src[1..];
     // A lone indicator byte (`[0x00]`) is the canonical empty block.
@@ -74,14 +75,21 @@ fn parse_header(src: &[u8]) -> Result<Header<'_>> {
 }
 
 /// Return the decompressed length of a MinLZ block without decoding it.
+///
+/// For a Snappy/S2 fallback block this returns the S2 decoded length (requires
+/// the `s2` feature).
 pub fn decompressed_len(src: &[u8]) -> Result<usize> {
     match parse_header(src)? {
         Header::Literals(lits) => Ok(lits.len()),
         Header::Compressed { dlen, .. } => Ok(dlen),
+        Header::Fallback(block) => fallback_len(block),
     }
 }
 
 /// Decompress a MinLZ block, returning the original bytes.
+///
+/// If the block is actually a Snappy or S2 block (non-zero indicator byte) it is
+/// decoded transparently when the `s2` feature is enabled.
 pub fn decompress(src: &[u8]) -> Result<Vec<u8>> {
     match parse_header(src)? {
         Header::Literals(lits) => Ok(lits.to_vec()),
@@ -90,7 +98,28 @@ pub fn decompress(src: &[u8]) -> Result<Vec<u8>> {
             decode_block(&mut dst, tokens)?;
             Ok(dst)
         }
+        Header::Fallback(block) => fallback_decode(block),
     }
+}
+
+#[cfg(feature = "s2")]
+fn fallback_decode(block: &[u8]) -> Result<Vec<u8>> {
+    crate::decode::decode(block)
+}
+
+#[cfg(not(feature = "s2"))]
+fn fallback_decode(_block: &[u8]) -> Result<Vec<u8>> {
+    Err(Error::Unsupported)
+}
+
+#[cfg(feature = "s2")]
+fn fallback_len(block: &[u8]) -> Result<usize> {
+    crate::decode::decode_len(block).map(|(n, _)| n)
+}
+
+#[cfg(not(feature = "s2"))]
+fn fallback_len(_block: &[u8]) -> Result<usize> {
+    Err(Error::Unsupported)
 }
 
 /// Decompress a MinLZ block into `dst`, which must have exactly the
@@ -111,6 +140,14 @@ pub fn decompress_into(dst: &mut [u8], src: &[u8]) -> Result<usize> {
             }
             decode_block(dst, tokens)?;
             Ok(dlen)
+        }
+        Header::Fallback(block) => {
+            let decoded = fallback_decode(block)?;
+            if dst.len() != decoded.len() {
+                return Err(Error::BufferTooSmall);
+            }
+            dst.copy_from_slice(&decoded);
+            Ok(decoded.len())
         }
     }
 }

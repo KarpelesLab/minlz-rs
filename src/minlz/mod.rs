@@ -38,5 +38,6 @@
 mod block;
 
 pub use block::{
-    compress, decompress, decompress_into, decompressed_len, max_compressed_len, MAX_BLOCK_SIZE,
+    compress, compress_level, decompress, decompress_into, decompressed_len, max_compressed_len,
+    Level, MAX_BLOCK_SIZE,
 };
