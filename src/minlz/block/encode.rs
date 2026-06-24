@@ -134,6 +134,44 @@ fn hash6(u: u64, bits: u32) -> usize {
     (((u << 16).wrapping_mul(227718039650203)) >> (64 - bits)) as usize
 }
 
+#[cfg(feature = "std")]
+std::thread_local! {
+    /// Recycled hash-table allocations (like the reference's `sync.Pool`).
+    static TABLE_POOL: std::cell::RefCell<Vec<Vec<u32>>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Obtain a `Vec<u32>` of length `n` filled with `fill`. Under `std` the backing
+/// allocation is recycled from a small thread-local pool, avoiding a fresh mmap +
+/// page faults on every call; the bytes are still re-initialised each time.
+/// Return it with [`put_table`] when done.
+#[cfg(feature = "std")]
+fn take_table(n: usize, fill: u32) -> Vec<u32> {
+    let mut v = TABLE_POOL
+        .with(|p| p.borrow_mut().pop())
+        .unwrap_or_default();
+    v.clear();
+    v.resize(n, fill);
+    v
+}
+
+#[cfg(feature = "std")]
+fn put_table(v: Vec<u32>) {
+    TABLE_POOL.with(|p| {
+        let mut p = p.borrow_mut();
+        if p.len() < 8 {
+            p.push(v);
+        }
+    });
+}
+
+#[cfg(not(feature = "std"))]
+fn take_table(n: usize, fill: u32) -> Vec<u32> {
+    alloc::vec![fill; n]
+}
+
+#[cfg(not(feature = "std"))]
+fn put_table(_v: Vec<u32>) {}
+
 /// Hash-table size (log2) chosen from the input length.
 fn table_bits(n: usize) -> u32 {
     let mut bits = 9;
@@ -150,7 +188,7 @@ fn table_bits(n: usize) -> u32 {
 fn encode_block_greedy(out: &mut Vec<u8>, src: &[u8]) {
     let n = src.len();
     const TABLE_BITS: u32 = 15;
-    let mut table = vec![0u32; 1usize << TABLE_BITS];
+    let mut table = take_table(1usize << TABLE_BITS, 0);
 
     let s_limit = n - 8; // loads read 8 bytes at s / next_s
     let mut next_emit = 0usize;
@@ -274,6 +312,7 @@ fn encode_block_greedy(out: &mut Vec<u8>, src: &[u8]) {
     if next_emit < n {
         emit_literals(out, &src[next_emit..n]);
     }
+    put_table(table);
 }
 
 /// Two-hash-table "better" matcher (ported from the reference `encodeBlockBetter`
@@ -284,8 +323,8 @@ fn encode_block_better(out: &mut Vec<u8>, src: &[u8]) {
     let n = src.len();
     const L_BITS: u32 = 17;
     const S_BITS: u32 = 14;
-    let mut l_table = vec![0u32; 1usize << L_BITS];
-    let mut s_table = vec![0u32; 1usize << S_BITS];
+    let mut l_table = take_table(1usize << L_BITS, 0);
+    let mut s_table = take_table(1usize << S_BITS, 0);
 
     let s_limit = n - 8; // load64 reads 8 bytes at s
     let mut next_emit = 0usize;
@@ -466,6 +505,8 @@ fn encode_block_better(out: &mut Vec<u8>, src: &[u8]) {
     if next_emit < n {
         emit_literals(out, &src[next_emit..n]);
     }
+    put_table(l_table);
+    put_table(s_table);
 }
 
 /// Compress `src` against a dictionary `prefix`, returning a dictionary block
@@ -634,8 +675,8 @@ fn best_match(
 fn encode_block_chain(out: &mut Vec<u8>, src: &[u8], depth: u32, lazy: bool) {
     let n = src.len();
     let bits = table_bits(n);
-    let mut head = vec![u32::MAX; 1usize << bits];
-    let mut prev = vec![u32::MAX; n];
+    let mut head = take_table(1usize << bits, u32::MAX);
+    let mut prev = take_table(n, u32::MAX);
 
     let insert = |head: &mut [u32], prev: &mut [u32], p: usize| {
         let h = hash4(load32(src, p), bits);
@@ -702,6 +743,8 @@ fn encode_block_chain(out: &mut Vec<u8>, src: &[u8], depth: u32, lazy: bool) {
     if next_emit < n {
         emit_literals(out, &src[next_emit..n]);
     }
+    put_table(head);
+    put_table(prev);
 }
 
 /// Extend a 4-byte match at `(s, cand)` backwards (not past `next_emit`) and

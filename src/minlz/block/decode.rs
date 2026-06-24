@@ -47,6 +47,70 @@ unsafe fn u32p(p: *const u8) -> u32 {
     u32::from_le_bytes([*p, *p.add(1), *p.add(2), *p.add(3)])
 }
 
+/// Shuffle masks for `pshufb`-based small-offset copies: `SHUFFLE[o][i] = i % o`,
+/// so a 16-byte register loaded at the pattern start, shuffled by `SHUFFLE[o]`,
+/// yields 16 bytes of the period-`o` pattern. Indices `1..=15` are valid.
+#[cfg(all(target_arch = "x86_64", feature = "std"))]
+static SHUFFLE: [[u8; 16]; 16] = {
+    let mut t = [[0u8; 16]; 16];
+    let mut o = 1usize;
+    while o < 16 {
+        let mut i = 0usize;
+        while i < 16 {
+            t[o][i] = (i % o) as u8;
+            i += 1;
+        }
+        o += 1;
+    }
+    t
+};
+
+/// Fill `dst[d..d+16]` with the period-`offset` pattern starting at `dst[from]`,
+/// for `1 <= offset < 16`, using a single SSSE3 `pshufb`. Only the first
+/// `offset` bytes of the loaded register are used (all `< d`, finalized).
+///
+/// SAFETY: requires SSSE3, `from + 16 <= dst.len()`, `d + 16 <= dst.len()`,
+/// `from + offset <= d`, and `offset` in `1..=15`.
+#[cfg(all(target_arch = "x86_64", feature = "std"))]
+#[target_feature(enable = "ssse3")]
+unsafe fn pattern_copy16(dp: *mut u8, d: usize, from: usize, offset: usize) {
+    use core::arch::x86_64::*;
+    let pat = _mm_loadu_si128(dp.add(from) as *const __m128i);
+    let mask = _mm_loadu_si128(SHUFFLE[offset].as_ptr() as *const __m128i);
+    _mm_storeu_si128(dp.add(d) as *mut __m128i, _mm_shuffle_epi8(pat, mask));
+}
+
+/// Copy a small-offset (`offset < 16`), short (`length <= 16`) match in the fast
+/// zone. Uses the SSSE3 pattern fill when available, else a scalar fallback.
+///
+/// SAFETY: `from + 16 <= dlen`, `d + 16 <= dlen`, `offset` in `1..=15`, and the
+/// pattern bytes `dst[from..from+offset]` are finalized (all `< d`).
+#[inline(always)]
+unsafe fn small_match_copy(
+    dp: *mut u8,
+    d: usize,
+    from: usize,
+    offset: usize,
+    length: usize,
+    use_simd: bool,
+) {
+    #[cfg(all(target_arch = "x86_64", feature = "std"))]
+    {
+        if use_simd {
+            pattern_copy16(dp, d, from, offset);
+            return;
+        }
+    }
+    let _ = use_simd;
+    if offset >= length {
+        ptr::copy_nonoverlapping(dp.add(from), dp.add(d), length);
+    } else {
+        for i in 0..length {
+            *dp.add(d + i) = *dp.add(from + i);
+        }
+    }
+}
+
 /// Outcome of parsing a block header.
 enum Header<'a> {
     /// Output is exactly these literal bytes (empty or `block size == 0`).
@@ -240,6 +304,10 @@ pub(crate) fn decode_block_from(dst: &mut [u8], src: &[u8], d_start: usize) -> R
     // and general-copy paths bounds-check explicitly before writing.
     let sp = src.as_ptr();
     let dp = dst.as_mut_ptr();
+    #[cfg(all(target_arch = "x86_64", feature = "std"))]
+    let use_simd = std::is_x86_feature_detected!("ssse3");
+    #[cfg(not(all(target_arch = "x86_64", feature = "std")))]
+    let use_simd = false;
     unsafe {
         while s + 20 < slen && d + 16 < dlen {
             let v = *sp.add(s);
@@ -352,9 +420,14 @@ pub(crate) fn decode_block_from(dst: &mut [u8], src: &[u8], d_start: usize) -> R
                 return Err(Error::Corrupt);
             }
             let from = d - offset;
-            if length <= 16 && offset >= 16 {
-                // Wide non-overlapping copy (source/dest 16-windows are disjoint).
-                ptr::copy_nonoverlapping(dp.add(from), dp.add(d), 16);
+            if length <= 16 {
+                if offset >= 16 {
+                    // Disjoint 16-byte windows: one wide non-overlapping copy.
+                    ptr::copy_nonoverlapping(dp.add(from), dp.add(d), 16);
+                } else {
+                    // Small offset: SSSE3 pattern fill (or scalar fallback).
+                    small_match_copy(dp, d, from, offset, length, use_simd);
+                }
                 d += length;
             } else if length <= dlen - d {
                 if offset >= length {
