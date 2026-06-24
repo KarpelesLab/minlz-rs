@@ -224,7 +224,28 @@ fn table_bits(n: usize) -> u32 {
 /// Hashes three positions per iteration (s, s+1, s+2), checks the last offset
 /// (repeat), and after a copy keeps emitting copies as long as the immediately
 /// following bytes match.
+// Multiversioned: dispatch to an AVX2/BMI2 build of the matcher on capable CPUs
+// (better instruction selection for the hash multiplies, shifts and trailing
+// zeros), else the baseline.
 fn encode_block_greedy(out: &mut Vec<u8>, src: &[u8]) {
+    #[cfg(all(target_arch = "x86_64", feature = "std"))]
+    {
+        if std::is_x86_feature_detected!("avx2") {
+            // SAFETY: AVX2 is available on this CPU.
+            return unsafe { encode_block_greedy_avx2(out, src) };
+        }
+    }
+    encode_block_greedy_impl(out, src)
+}
+
+#[cfg(all(target_arch = "x86_64", feature = "std"))]
+#[target_feature(enable = "avx2,bmi1,bmi2,lzcnt,popcnt,fma")]
+unsafe fn encode_block_greedy_avx2(out: &mut Vec<u8>, src: &[u8]) {
+    encode_block_greedy_impl(out, src)
+}
+
+#[inline(always)]
+fn encode_block_greedy_impl(out: &mut Vec<u8>, src: &[u8]) {
     let n = src.len();
     const TABLE_BITS: u32 = 15;
     let mut table = take_table(1usize << TABLE_BITS, 0);
@@ -366,6 +387,24 @@ fn encode_block_greedy(out: &mut Vec<u8>, src: &[u8]) {
 /// a short hash (4 bytes) finds short ones — one lookup each, no chain walking —
 /// and positions inside each match are indexed cheaply ("index in-between").
 fn encode_block_better(out: &mut Vec<u8>, src: &[u8]) {
+    #[cfg(all(target_arch = "x86_64", feature = "std"))]
+    {
+        if std::is_x86_feature_detected!("avx2") {
+            // SAFETY: AVX2 is available on this CPU.
+            return unsafe { encode_block_better_avx2(out, src) };
+        }
+    }
+    encode_block_better_impl(out, src)
+}
+
+#[cfg(all(target_arch = "x86_64", feature = "std"))]
+#[target_feature(enable = "avx2,bmi1,bmi2,lzcnt,popcnt,fma")]
+unsafe fn encode_block_better_avx2(out: &mut Vec<u8>, src: &[u8]) {
+    encode_block_better_impl(out, src)
+}
+
+#[inline(always)]
+fn encode_block_better_impl(out: &mut Vec<u8>, src: &[u8]) {
     let n = src.len();
     const L_BITS: u32 = 17;
     const S_BITS: u32 = 14;
