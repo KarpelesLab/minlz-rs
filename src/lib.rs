@@ -9,15 +9,20 @@
 //!
 //! This crate provides two distinct, wire-incompatible compression codecs:
 //!
-//! - **S2** — the default, at the crate root (and mirrored under [`s2`]). Binary
-//!   compatible with the Go implementation at `github.com/klauspost/compress/s2`.
-//!   Gated behind the `s2` feature.
-//! - **MinLZ** — under [`minlz`], an independent implementation of the format from
-//!   `github.com/minio/minlz`. Gated behind the `minlz` feature.
+//! - **S2** — Snappy-compatible, in the [`s2`] module. Binary compatible with the
+//!   Go implementation at `github.com/klauspost/compress/s2`. Gated behind the
+//!   `s2` feature.
+//! - **MinLZ** — in the [`minlz`] module, an independent implementation of the
+//!   format from `github.com/minio/minlz`. Gated behind the `minlz` feature.
 //!
-//! The crate is named `minlz` for historical reasons, but its root API is — and
-//! remains, for backwards compatibility — the **S2** codec. New MinLZ code lives
-//! in the [`minlz`] module.
+//! **Pick a codec explicitly** via the [`s2`] or [`minlz`] module so the format
+//! is unambiguous at the call site.
+//!
+//! The crate is named `minlz` for historical reasons, and the items re-exported
+//! at the **crate root** (`encode`/`decode`/`Reader`/`Writer`/…) are the S2 codec,
+//! kept for backwards compatibility — they are exactly [`s2`]`::*`. Prefer the
+//! namespaced paths in new code; the bare root names may be removed in a future
+//! major release.
 //!
 //! S2 provides:
 //! - Better compression than Snappy
@@ -28,7 +33,7 @@
 //! ## Block Format Example
 //!
 //! ```rust
-//! use minlz::{encode, decode};
+//! use minlz::s2::{encode, decode};
 //!
 //! let data = b"Hello, World! This is a test of S2 compression.";
 //! let compressed = encode(data);

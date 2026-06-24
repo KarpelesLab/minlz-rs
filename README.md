@@ -39,16 +39,18 @@ This crate provides two distinct, wire-incompatible compression formats:
 | Wire compat | byte-for-byte with Go `s2` | independent format (decodes Snappy/S2; its output is **not** readable by them) |
 | Status | block + stream + index + dict | block, stream, index/seeking, levels, Snappy/S2 fallback, CLI (dictionary is crate-local) |
 
-> **Note on the crate name:** despite being named `minlz`, this crate's root API has always been the **S2** codec, and remains so for backwards compatibility. The MinLZ codec lives under the `minlz::minlz` module.
+### Choosing a codec — use the namespaced modules
+
+**New code should pick a codec explicitly** via the [`s2`](https://docs.rs/minlz/latest/minlz/s2/) or [`minlz`](https://docs.rs/minlz/latest/minlz/minlz/) module, so the format is unambiguous at the call site:
 
 ```rust
 use std::io::{Read, Write};
 
-// S2 (unchanged, at the crate root):
-let c = minlz::encode(b"hello hello hello");
-let d = minlz::decode(&c).unwrap();
+// S2 — use the `s2` module:
+let c = minlz::s2::encode(b"hello hello hello");
+let d = minlz::s2::decode(&c).unwrap();
 
-// MinLZ block codec:
+// MinLZ block codec — use the `minlz` module:
 let c = minlz::minlz::compress(b"hello hello hello").unwrap();
 let d = minlz::minlz::decompress(&c).unwrap();
 
@@ -59,6 +61,8 @@ let stream = w.finish().unwrap();
 let mut out = Vec::new();
 minlz::minlz::Reader::new(&stream[..]).read_to_end(&mut out).unwrap();
 ```
+
+> **Crate-root API (compatibility only).** Despite the crate being named `minlz`, the items re-exported at the crate root (`minlz::encode`, `minlz::decode`, `minlz::Reader`, `minlz::Writer`, …) are the **S2** codec, kept unchanged for backwards compatibility. They are exactly `minlz::s2::*`. **Prefer the `minlz::s2::` / `minlz::minlz::` paths in new code** — the bare root names don't say which format they are, and a future major release may remove them.
 
 What's implemented in `minlz::minlz`:
 
@@ -102,6 +106,7 @@ minlz = "1"
 | `s2` | ✅ | The S2 codec (crate root + `s2` module). |
 | `minlz` | ✅ | The MinLZ codec (`minlz` module). |
 | `concurrent` | | Parallel S2 compression with Rayon (implies `std` + `s2`). |
+| `cli` | | Build the `s2c`/`s2d`/`mzc`/`mzd` command-line tools (implies `concurrent` + `minlz`). Off by default so library users don't pull in the CLI dependencies. |
 
 Pick a single codec to shrink the build — e.g. MinLZ only:
 
@@ -131,10 +136,13 @@ minlz = { version = "1", default-features = false }
 
 ## Usage
 
+The examples below use the **S2** codec via `minlz::s2::*`. For MinLZ, swap in
+`minlz::minlz::*` (see [Choosing a codec](#choosing-a-codec--use-the-namespaced-modules)).
+
 ### Block Format (Simple Compression)
 
 ```rust
-use minlz::{encode, decode};
+use minlz::s2::{encode, decode};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let data = b"Hello, World! This is a test.";
@@ -154,7 +162,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 ### Stream Format (With CRC Validation)
 
 ```rust
-use minlz::{Writer, Reader};
+use minlz::s2::{Writer, Reader};
 use std::io::{Write, Read};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -181,7 +189,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 ### Multiple Compression Levels
 
 ```rust
-use minlz::{encode, encode_better, encode_best};
+use minlz::s2::{encode, encode_better, encode_best};
 
 let data = b"Some data to compress...";
 
@@ -203,7 +211,7 @@ the per-call allocation cost. Output is bit-for-bit identical to the
 corresponding free function.
 
 ```rust
-use minlz::Encoder;
+use minlz::s2::Encoder;
 
 let mut enc = Encoder::new();
 let mut outputs: Vec<Vec<u8>> = Vec::new();
@@ -240,7 +248,7 @@ let mut compressed = Vec::new();
 Dictionaries can improve compression of similar data by pre-seeding the compressor with common patterns:
 
 ```rust
-use minlz::{make_dict, encode_with_dict, decode_with_dict};
+use minlz::s2::{make_dict, encode_with_dict, decode_with_dict};
 
 // Create a dictionary from sample data
 let samples = b"Common patterns that appear frequently in your data...";
@@ -362,7 +370,7 @@ decompress it with the Go library, and vice versa.
 
 Rust side:
 ```rust
-use minlz::encode;
+use minlz::s2::encode;
 use std::fs::File;
 use std::io::Write;
 
