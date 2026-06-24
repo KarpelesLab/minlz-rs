@@ -23,7 +23,7 @@ This crate also ships a second, independent codec: **[MinLZ](#minlz)** (the form
 - **Dictionary Compression**: Full support for dictionary-based compression
 - **Concurrent Compression**: Optional parallel compression with Rayon
 - **Index Support**: Seeking within compressed streams
-- **Mostly Safe Rust**: A few well-documented `unsafe` blocks in hot paths (uninitialised `Vec` allocation); covered by unit, property-based, libfuzzer, and Go-binary-compat tests
+- **Mostly Safe Rust**: A few well-documented `unsafe` blocks in hot paths (uninitialised `Vec` allocation; the MinLZ decode "wildcopy" fast zone, where a margin invariant makes every access provably in-bounds — validated by Miri and Go-differential fuzzing); covered by unit, property-based, libfuzzer, and Go-binary-compat tests
 - **`no_std` Support**: The block API (`encode*`/`decode*`/`Dict`/`Index`) works on `no_std` + `alloc`; disable default features to drop the `std`-only streaming layer
 - **Two codecs**: S2 (default, at the crate root) and MinLZ (`minlz::minlz`), each behind its own feature flag
 
