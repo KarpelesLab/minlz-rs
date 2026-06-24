@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.1](https://github.com/KarpelesLab/minlz-rs/compare/v1.2.0...v1.2.1) - 2026-06-24
+
+### Other
+
+- steer new code to s2/minlz modules; document cli feature
+- Optimize MinLZ encode and decode hot paths
+- scope minimal-versions to library features
+- release v1.2.0 ([#1](https://github.com/KarpelesLab/minlz-rs/pull/1))
+
 ## [1.2.0](https://github.com/KarpelesLab/minlz-rs/compare/v1.1.0...v1.2.0) - 2026-06-24
 
 ### Other
