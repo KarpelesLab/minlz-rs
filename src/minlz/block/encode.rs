@@ -4,9 +4,10 @@
 // A self-contained LZ encoder. The MinLZ spec leaves encoder output
 // implementation-defined — any token stream the reference decoder accepts is
 // conformant — so this does not attempt to match the reference encoder's bytes.
-// `Fastest` is a greedy single-table matcher; `Balanced`/`Smallest` add a
+// `Fastest` is a single-table matcher that hashes three positions per iteration;
+// `Balanced` is a two-hash-table ("better") matcher; `Smallest` is a deep
 // hash-chain search with lazy matching. All share the same (verified) token
-// emission and a repeat (last-offset) fast path.
+// emission — including fused literal+copy — and a repeat (last-offset) fast path.
 
 use super::{
     Level, MAX_BLOCK_SIZE, MAX_COPY1_LENGTH, MAX_COPY1_OFFSET, MAX_COPY2_OFFSET, MAX_COPY3_OFFSET,
@@ -127,6 +128,12 @@ fn hash4u(u: u64, bits: u32) -> usize {
     ((u as u32).wrapping_mul(2654435761) >> (32 - bits)) as usize
 }
 
+/// Hash of the lowest 6 bytes of `u` (for the Fastest single table).
+#[inline(always)]
+fn hash6(u: u64, bits: u32) -> usize {
+    (((u << 16).wrapping_mul(227718039650203)) >> (64 - bits)) as usize
+}
+
 /// Hash-table size (log2) chosen from the input length.
 fn table_bits(n: usize) -> u32 {
     let mut bits = 9;
@@ -136,54 +143,131 @@ fn table_bits(n: usize) -> u32 {
     bits
 }
 
-/// Greedy match loop. Appends a complete MinLZ token stream for `src` to `out`.
+/// Fastest single-table matcher (ported from the reference `encodeBlockGo`).
+/// Hashes three positions per iteration (s, s+1, s+2), checks the last offset
+/// (repeat), and after a copy keeps emitting copies as long as the immediately
+/// following bytes match.
 fn encode_block_greedy(out: &mut Vec<u8>, src: &[u8]) {
     let n = src.len();
-    let bits = table_bits(n);
-    let mut table = vec![u32::MAX; 1usize << bits];
+    const TABLE_BITS: u32 = 15;
+    let mut table = vec![0u32; 1usize << TABLE_BITS];
 
-    let s_limit = n - INPUT_MARGIN;
+    let s_limit = n - 8; // loads read 8 bytes at s / next_s
     let mut next_emit = 0usize;
-    let mut last_offset = 1usize;
-    // Start at 1 so a repeat check always has a prior byte to look back at.
+    let mut last_offset = 1usize; // the "repeat" offset
     let mut s = 1usize;
+    let mut cv = load64(src, s);
 
-    while s <= s_limit {
-        // Repeat (last-offset) fast path: cheap and very effective on
-        // repetitive data.
-        if s >= last_offset && load32(src, s) == load32(src, s - last_offset) {
-            let cand = s - last_offset;
-            let (start, len) = extend(src, s, cand, next_emit);
-            emit_literals(out, &src[next_emit..start]);
-            emit_repeat(out, len);
-            s = start + len;
+    /// Forward-extend a 4-byte match: `s`/`c` point past the matched prefix.
+    #[inline(always)]
+    fn extend_fwd(src: &[u8], n: usize, mut s: usize, mut c: usize) -> usize {
+        while s <= n - 8 {
+            let diff = load64(src, s) ^ load64(src, c);
+            if diff != 0 {
+                return s + (diff.trailing_zeros() >> 3) as usize;
+            }
+            s += 8;
+            c += 8;
+        }
+        s
+    }
+
+    'outer: loop {
+        let mut candidate;
+        loop {
+            let next_s = s + ((s - next_emit) >> 6) + 4;
+            if next_s > s_limit {
+                break 'outer;
+            }
+            let min_src_pos = s as isize - MAX_COPY3_OFFSET as isize;
+            let hash0 = hash6(cv, TABLE_BITS);
+            let hash1 = hash6(cv >> 8, TABLE_BITS);
+            candidate = table[hash0] as usize;
+            let candidate2 = table[hash1] as usize;
+            table[hash0] = s as u32;
+            table[hash1] = (s + 1) as u32;
+            let hash2 = hash6(cv >> 16, TABLE_BITS);
+
+            // Repeat (last-offset) check on the 4 bytes at s+1.
+            if (cv >> 8) as u32 == load32(src, s - last_offset + 1) {
+                let mut base = s + 1;
+                let mut i = base - last_offset;
+                while base > next_emit && i > 0 && src[i - 1] == src[base - 1] {
+                    i -= 1;
+                    base -= 1;
+                }
+                emit_literals(out, &src[next_emit..base]);
+                let ce = s - last_offset + 5;
+                s = extend_fwd(src, n, s + 5, ce);
+                emit_repeat(out, s - base);
+                next_emit = s;
+                if s >= s_limit {
+                    break 'outer;
+                }
+                cv = load64(src, s);
+                continue;
+            }
+
+            if candidate as isize >= min_src_pos && cv as u32 == load32(src, candidate) {
+                break;
+            }
+            candidate = table[hash2] as usize;
+            if candidate2 as isize >= min_src_pos && (cv >> 8) as u32 == load32(src, candidate2) {
+                table[hash2] = (s + 2) as u32;
+                candidate = candidate2;
+                s += 1;
+                break;
+            }
+            table[hash2] = (s + 2) as u32;
+            if candidate as isize >= min_src_pos && (cv >> 16) as u32 == load32(src, candidate) {
+                s += 2;
+                break;
+            }
+
+            cv = load64(src, next_s);
+            s = next_s;
+        }
+
+        // Extend backwards, then forwards.
+        while candidate > 0 && s > next_emit && src[candidate - 1] == src[s - 1] {
+            candidate -= 1;
+            s -= 1;
+        }
+        let mut base = s;
+        let mut offset = base - candidate;
+        s = extend_fwd(src, n, s + 4, candidate + 4);
+        emit_match(
+            out,
+            &src[next_emit..base],
+            offset,
+            s - base,
+            &mut last_offset,
+        );
+
+        // Keep emitting copies while the bytes immediately after the match
+        // continue to match a recent position.
+        loop {
             next_emit = s;
-            continue;
+            if s >= s_limit {
+                break 'outer;
+            }
+            let x = load64(src, s - 2);
+            let m2_hash = hash6(x, TABLE_BITS);
+            let curr = (x >> 16) as u32;
+            let curr_hash = hash6(x >> 16, TABLE_BITS);
+            candidate = table[curr_hash] as usize;
+            table[m2_hash] = (s - 2) as u32;
+            table[curr_hash] = s as u32;
+            if s - candidate > MAX_COPY3_OFFSET || curr != load32(src, candidate) {
+                cv = load64(src, s + 1);
+                s += 1;
+                break;
+            }
+            offset = s - candidate;
+            base = s;
+            s = extend_fwd(src, n, s + 4, candidate + 4);
+            emit_copy(out, offset, s - base, &mut last_offset);
         }
-
-        let cv = load32(src, s);
-        let h = hash4(cv, bits);
-        let cand = table[h];
-        table[h] = s as u32;
-
-        let usable = cand != u32::MAX && {
-            let c = cand as usize;
-            let off = s - c;
-            off <= MAX_COPY3_OFFSET && load32(src, c) == cv
-        };
-        if !usable {
-            // No match: advance, skipping faster the longer we go unmatched.
-            s += ((s - next_emit) >> 5) + 1;
-            continue;
-        }
-
-        let cand = cand as usize;
-        // Offset is invariant under the (symmetric) backward extension below.
-        let offset = s - cand;
-        let (start, len) = extend(src, s, cand, next_emit);
-        emit_match(out, &src[next_emit..start], offset, len, &mut last_offset);
-        s = start + len;
-        next_emit = s;
     }
 
     // Trailing literals.
