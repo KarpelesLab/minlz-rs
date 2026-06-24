@@ -260,38 +260,32 @@ let dict_bytes = dict.to_bytes();
 
 ## Command-Line Tools
 
-The `minlz-tools` package provides `s2c` (compression) and `s2d` (decompression) command-line tools that are fully compatible with the Go s2 tools.
+The crate ships four command-line tools behind the `cli` feature: `s2c` / `s2d`
+(S2, compatible with Go's s2c/s2d) and `mzc` / `mzd` (MinLZ). They are not built
+by a plain library build, so library users don't pull in the CLI dependencies.
 
 ```bash
-# Install from source
-cargo install --path minlz-tools
+# Install the tools from crates.io (or `cargo install --path . --features cli`)
+cargo install minlz --features cli
 
-# Compress a file
+# S2
 s2c input.txt              # Creates input.txt.s2
 s2c --slower input.txt     # Best compression
-s2c --faster input.txt     # Fast compression
-
-# Decompress a file
 s2d input.txt.s2           # Creates input.txt
 s2d --verify input.txt.s2  # Verify integrity
-```
 
-The tools are cross-compatible with Go's s2c/s2d and offer 12-98x faster performance depending on the operation.
-
-For the **MinLZ** format, the same package provides `mzc` / `mzd`:
-
-```bash
-# Compress (interoperable with reference .mz files)
+# MinLZ (interoperable with reference .mz files)
 mzc input.txt                       # Creates input.txt.mz
 mzc --level smallest --index in.txt # Best ratio + seek index
-
-# Decompress
 mzd input.txt.mz                    # Creates input.txt
 mzd -c input.txt.mz                 # Write to stdout
 mzd --offset 1048576 in.txt.mz      # Seek (needs an indexed stream)
 ```
 
-See [minlz-tools/README.md](minlz-tools/README.md) for complete documentation.
+Pre-built binaries for Linux, macOS, and Windows are attached to each
+[GitHub Release](https://github.com/KarpelesLab/minlz-rs/releases).
+
+The S2 tools are cross-compatible with Go's s2c/s2d and offer 12-98x faster performance depending on the operation.
 
 ## Performance
 

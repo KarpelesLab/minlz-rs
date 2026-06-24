@@ -1,5 +1,9 @@
 // Copyright 2024 Karpeles Lab Inc.
 // Integration tests for the mzc/mzd CLI tools.
+//
+// The `CARGO_BIN_EXE_*` env vars only exist when the binaries are built, which
+// requires the `cli` feature; gate the whole test on it.
+#![cfg(feature = "cli")]
 
 use std::io::Write;
 use std::process::{Command, Stdio};

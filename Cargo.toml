@@ -4,7 +4,7 @@ version = "1.2.0"
 edition = "2021"
 rust-version = "1.81"
 authors = ["Karpeles Lab Inc."]
-description = "S2 compression format - compatible with klauspost/compress/s2"
+description = "S2 and MinLZ compression — compatible with klauspost/compress/s2 and minio/minlz"
 license = "BSD-3-Clause"
 repository = "https://github.com/KarpelesLab/minlz-rs"
 
@@ -15,6 +15,10 @@ path = "src/lib.rs"
 [dependencies]
 crc = "3.3.0"
 rayon = { version = "1.8", optional = true }
+# CLI-only dependencies (pulled in only by the `cli` feature).
+clap = { version = "4", features = ["derive", "wrap_help"], optional = true }
+anyhow = { version = "1", optional = true }
+indicatif = { version = "0.17", optional = true }
 
 [features]
 default = ["std", "s2", "minlz"]
@@ -29,6 +33,9 @@ s2 = []
 # `minlz` module.
 minlz = []
 concurrent = ["std", "s2", "rayon"]
+# The command-line tools (s2c/s2d/mzc/mzd). Off by default so library users do
+# not pull in the CLI dependencies. Install with `cargo install minlz --features cli`.
+cli = ["dep:clap", "dep:anyhow", "dep:indicatif", "concurrent", "minlz"]
 
 [dev-dependencies]
 criterion = "0.5"
@@ -37,3 +44,25 @@ proptest = "1.4"
 [[bench]]
 name = "compression"
 harness = false
+
+# Command-line tools. Each requires the `cli` feature, so a plain `cargo build`
+# (library) does not compile them or their dependencies.
+[[bin]]
+name = "s2c"
+path = "src/bin/s2c.rs"
+required-features = ["cli"]
+
+[[bin]]
+name = "s2d"
+path = "src/bin/s2d.rs"
+required-features = ["cli"]
+
+[[bin]]
+name = "mzc"
+path = "src/bin/mzc.rs"
+required-features = ["cli"]
+
+[[bin]]
+name = "mzd"
+path = "src/bin/mzd.rs"
+required-features = ["cli"]

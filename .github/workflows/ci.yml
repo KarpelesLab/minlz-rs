@@ -64,10 +64,8 @@ jobs:
       - name: Run doc tests
         run: cargo test --doc --verbose
 
-      - name: Test minlz-tools
-        run: |
-          cd minlz-tools
-          cargo test --verbose
+      - name: Build and test the CLI tools
+        run: cargo test --features cli --test mz_cli --verbose
 
   fmt:
     name: Rustfmt
@@ -84,11 +82,6 @@ jobs:
       - name: Check formatting
         run: cargo fmt --all -- --check
 
-      - name: Check minlz-tools formatting
-        run: |
-          cd minlz-tools
-          cargo fmt --all -- --check
-
   clippy:
     name: Clippy
     runs-on: ubuntu-latest
@@ -103,11 +96,6 @@ jobs:
 
       - name: Run clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
-
-      - name: Run clippy on minlz-tools
-        run: |
-          cd minlz-tools
-          cargo clippy --all-targets -- -D warnings
 
   coverage:
     name: Code Coverage
