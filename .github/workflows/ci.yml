@@ -135,8 +135,13 @@ jobs:
       - name: Install cargo-minimal-versions
         run: cargo install cargo-minimal-versions
 
-      - name: Check minimal versions
-        run: cargo minimal-versions check --all-features
+      # Validate the library's declared dependency minimums. The `cli` feature
+      # is excluded on purpose: its app-level deps (clap/anyhow/indicatif) pull
+      # in proc-macro crates whose `-Z minimal-versions` resolution is broken
+      # ecosystem-wide (e.g. proc-macro2 1.0.0 / `proc_macro_span_shrink`), which
+      # is not something this crate's minimums can fix.
+      - name: Check minimal versions (library features)
+        run: cargo minimal-versions check --no-default-features --features std,s2,minlz,concurrent
 
   benchmark:
     name: Benchmark
