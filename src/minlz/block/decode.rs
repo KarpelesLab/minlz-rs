@@ -204,6 +204,147 @@ pub(crate) fn decode_block_from(dst: &mut [u8], src: &[u8], d_start: usize) -> R
     let mut s = 0usize;
     let mut offset: usize = 1;
 
+    // --- Fast zone: wide, mostly-unchecked decoding while margin allows. ---
+    // The longest token header is 7 bytes, and short literals/copies are widened
+    // to fixed 16-byte moves, so we require ~20 bytes of input and 16 bytes of
+    // output margin. Overwrites past the real length are harmless: positions
+    // ahead of `d` are always rewritten before `d` reaches them, and copies only
+    // read finalized data behind `d` (the classic "wildcopy" invariant). When
+    // the margin runs out we fall through to the fully-checked loop below.
+    while s + 20 < slen && d + 16 < dlen {
+        let v = src[s];
+        let length: usize;
+        match v & 0x03 {
+            0 => {
+                let x = v >> 3;
+                let len = if x < 29 {
+                    s += 1;
+                    (x as usize) + 1
+                } else if x == 29 {
+                    let l = 30 + src[s + 1] as usize;
+                    s += 2;
+                    l
+                } else if x == 30 {
+                    let l = 30 + u16le(src, s + 1);
+                    s += 3;
+                    l
+                } else {
+                    let l = 30 + u24le(src, s + 1);
+                    s += 4;
+                    l
+                };
+                if v & 4 == 0 {
+                    // Literals.
+                    if len <= 16 {
+                        let chunk: [u8; 16] = src[s..s + 16].try_into().unwrap();
+                        dst[d..d + 16].copy_from_slice(&chunk);
+                    } else if len <= dlen - d && len <= slen - s {
+                        dst[d..d + len].copy_from_slice(&src[s..s + len]);
+                    } else {
+                        return Err(Error::Corrupt);
+                    }
+                    d += len;
+                    s += len;
+                    continue;
+                }
+                length = len; // repeat: copy from the previous offset below
+            }
+            1 => {
+                let mut len = ((v >> 2) & 15) as usize;
+                offset = (u16le(src, s) >> 6) + 1;
+                if len == 15 {
+                    len = src[s + 2] as usize + 18;
+                    s += 3;
+                } else {
+                    len += 4;
+                    s += 2;
+                }
+                length = len;
+            }
+            2 => {
+                let lc = (v >> 2) as usize;
+                offset = u16le(src, s + 1) + MIN_COPY2_OFFSET;
+                length = if lc <= 60 {
+                    s += 3;
+                    lc + 4
+                } else if lc == 61 {
+                    let l = src[s + 3] as usize + 64;
+                    s += 4;
+                    l
+                } else if lc == 62 {
+                    let l = u16le(src, s + 3) + 64;
+                    s += 5;
+                    l
+                } else {
+                    let l = u24le(src, s + 3) + 64;
+                    s += 6;
+                    l
+                };
+            }
+            _ => {
+                let val = u32le(src, s);
+                let is_copy3 = val & 4 != 0;
+                let mut lit_len = ((val >> 3) & 3) as usize;
+                let len: usize;
+                if !is_copy3 {
+                    len = 4 + ((val >> 5) & 7) as usize;
+                    offset = ((val >> 8) & 0xffff) as usize + MIN_COPY2_OFFSET;
+                    s += 3;
+                    lit_len += 1;
+                } else {
+                    let lc = (val >> 5) & 63;
+                    offset = (val >> 11) as usize + MIN_COPY3_OFFSET;
+                    if lc < 61 {
+                        len = lc as usize + 4;
+                        s += 4;
+                    } else if lc == 61 {
+                        len = src[s + 4] as usize + 64;
+                        s += 5;
+                    } else if lc == 62 {
+                        len = u16le(src, s + 4) + 64;
+                        s += 6;
+                    } else {
+                        len = u24le(src, s + 4) + 64;
+                        s += 7;
+                    }
+                }
+                if lit_len > 0 {
+                    // Fused literals (1..4) emitted before the copy; widen to 4.
+                    let chunk: [u8; 4] = src[s..s + 4].try_into().unwrap();
+                    dst[d..d + 4].copy_from_slice(&chunk);
+                    d += lit_len;
+                    s += lit_len;
+                }
+                length = len;
+            }
+        }
+
+        // Copy (also the repeat path). `offset` is always >= 1 here.
+        if offset > d {
+            return Err(Error::Corrupt);
+        }
+        let from = d - offset;
+        if length <= 16 && offset >= 16 {
+            // Wide non-overlapping copy (offset >= 16 ⇒ source/dest 16-windows
+            // are disjoint, and from + 16 <= d < dlen).
+            let mut buf = [0u8; 16];
+            buf.copy_from_slice(&dst[from..from + 16]);
+            dst[d..d + 16].copy_from_slice(&buf);
+            d += length;
+        } else if length <= dlen - d {
+            if offset >= length {
+                dst.copy_within(from..from + length, d);
+            } else {
+                for i in 0..length {
+                    dst[d + i] = dst[from + i];
+                }
+            }
+            d += length;
+        } else {
+            return Err(Error::Corrupt);
+        }
+    }
+
     while s < slen {
         let length: usize;
         match src[s] & 0x03 {

@@ -270,11 +270,32 @@ fn encode_block_prefixed(out: &mut Vec<u8>, combined: &[u8], prefix: usize) {
     }
 }
 
-/// Find the best match for position `s` by walking the hash chain up to
-/// `depth` links. Returns `(candidate, length)` of the longest match, or
-/// `None`. Prefers longer matches; on a tie prefers the smaller offset (which
-/// tends to encode in fewer bytes).
-#[allow(clippy::too_many_arguments)]
+/// Forward-only match length from `s` against `cand` (`cand < s`), 8 bytes at a
+/// time. Used to rank chain candidates cheaply before committing to one.
+#[inline(always)]
+fn forward_len(src: &[u8], s: usize, cand: usize) -> usize {
+    let max = src.len() - s;
+    let mut len = 0usize;
+    while len + 8 <= max {
+        let a = u64::from_le_bytes(src[s + len..s + len + 8].try_into().unwrap());
+        let b = u64::from_le_bytes(src[cand + len..cand + len + 8].try_into().unwrap());
+        let diff = a ^ b;
+        if diff != 0 {
+            return len + (diff.trailing_zeros() / 8) as usize;
+        }
+        len += 8;
+    }
+    while len < max && src[cand + len] == src[s + len] {
+        len += 1;
+    }
+    len
+}
+
+/// Find the best match for position `s` by walking the hash chain up to `depth`
+/// links. Returns `(candidate, forward_length)` of the longest match, or `None`.
+/// Prefers longer matches; on a tie prefers the smaller offset (fewer encoded
+/// bytes). Candidates that cannot beat the current best (their byte at the
+/// best-length boundary differs) are rejected without a full comparison.
 fn best_match(
     src: &[u8],
     s: usize,
@@ -282,13 +303,13 @@ fn best_match(
     prev: &[u32],
     bits: u32,
     depth: u32,
-    next_emit: usize,
 ) -> Option<(usize, usize)> {
     let cv = load32(src, s);
     let mut c = head[hash4(cv, bits)];
     let mut best_len = 0usize;
     let mut best_cand = 0usize;
     let mut tries = depth;
+    let max = src.len() - s;
     while c != u32::MAX && tries > 0 {
         let cand = c as usize;
         if cand >= s {
@@ -300,15 +321,20 @@ fn best_match(
         if off > MAX_COPY3_OFFSET {
             break; // chain is ordered newest-first; everything older is farther
         }
-        if load32(src, cand) == cv {
-            let (_, len) = extend(src, s, cand, next_emit);
+        tries -= 1;
+        let next = prev[cand];
+        // Quick reject: a longer match must at least match at the boundary byte.
+        if (best_len == 0 || src[cand + best_len] == src[s + best_len]) && load32(src, cand) == cv {
+            let len = forward_len(src, s, cand);
             if len > best_len || (len == best_len && off < s - best_cand) {
                 best_len = len;
                 best_cand = cand;
+                if best_len == max {
+                    break; // matched to the end of input
+                }
             }
         }
-        c = prev[cand];
-        tries -= 1;
+        c = next;
     }
     if best_len >= 4 {
         Some((best_cand, best_len))
@@ -353,8 +379,8 @@ fn encode_block_chain(out: &mut Vec<u8>, src: &[u8], depth: u32, lazy: bool) {
         }
 
         insert(&mut head, &mut prev, s);
-        let m = best_match(src, s, &head, &prev, bits, depth, next_emit);
-        let (mut cand, mut len) = match m {
+        let m = best_match(src, s, &head, &prev, bits, depth);
+        let (mut cand, len) = match m {
             Some(v) => v,
             None => {
                 s += ((s - next_emit) >> 5) + 1;
@@ -363,21 +389,20 @@ fn encode_block_chain(out: &mut Vec<u8>, src: &[u8], depth: u32, lazy: bool) {
         };
 
         // Lazy matching: if inserting s+1 yields a strictly longer match, defer
-        // and take that one instead (emitting src[s] as a literal).
+        // and take that one instead (emitting src[s] as a literal). The final
+        // length is recomputed by `extend` below, so we only need s and cand.
         if lazy && s < s_limit {
             insert(&mut head, &mut prev, s + 1);
-            if let Some((c2, l2)) = best_match(src, s + 1, &head, &prev, bits, depth, next_emit) {
+            if let Some((c2, l2)) = best_match(src, s + 1, &head, &prev, bits, depth) {
                 if l2 > len {
                     s += 1;
                     cand = c2;
-                    len = l2;
                 }
             }
         }
 
         let offset = s - cand;
         let (start, mlen) = extend(src, s, cand, next_emit);
-        debug_assert_eq!(mlen, len);
         emit_literals(out, &src[next_emit..start]);
         emit_copy(out, offset, mlen, &mut last_offset);
         // Insert positions covered by the match so later matches can find them.
@@ -401,8 +426,20 @@ fn extend(src: &[u8], mut s: usize, mut cand: usize, next_emit: usize) -> (usize
         s -= 1;
         cand -= 1;
     }
+    // Forward extension, 8 bytes at a time. `cand < s`, so `cand + len + 8` is
+    // always `<= s + len + 8 <= n` whenever the `s`-side read is in bounds.
+    let max = n - s;
     let mut len = 0usize;
-    while s + len < n && src[cand + len] == src[s + len] {
+    while len + 8 <= max {
+        let a = u64::from_le_bytes(src[s + len..s + len + 8].try_into().unwrap());
+        let b = u64::from_le_bytes(src[cand + len..cand + len + 8].try_into().unwrap());
+        let diff = a ^ b;
+        if diff != 0 {
+            return (s, len + (diff.trailing_zeros() / 8) as usize);
+        }
+        len += 8;
+    }
+    while len < max && src[cand + len] == src[s + len] {
         len += 1;
     }
     (s, len)

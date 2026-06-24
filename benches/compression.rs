@@ -1,4 +1,5 @@
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
+use minlz::minlz::{compress_level, decompress, Level};
 use minlz::{decode, encode, encode_best, encode_better, Encoder};
 
 fn generate_test_data(size: usize, pattern: &str) -> Vec<u8> {
@@ -140,6 +141,45 @@ fn bench_encoder_reused(c: &mut Criterion) {
     group.finish();
 }
 
+/// MinLZ block codec: encode (each level) and decode throughput.
+fn bench_minlz(c: &mut Criterion) {
+    let levels = [
+        ("fastest", Level::Fastest),
+        ("balanced", Level::Balanced),
+        ("smallest", Level::Smallest),
+    ];
+
+    let mut enc = c.benchmark_group("minlz_encode");
+    for size in [10 * 1024, 100 * 1024] {
+        enc.throughput(Throughput::Bytes(size as u64));
+        for pattern in ["random", "repeated", "text", "sequential"] {
+            let data = generate_test_data(size, pattern);
+            for (lname, level) in levels {
+                let id = BenchmarkId::new(format!("{lname}/{pattern}"), size);
+                enc.bench_with_input(id, &data, |b, data| {
+                    b.iter(|| compress_level(black_box(data), level).unwrap());
+                });
+            }
+        }
+    }
+    enc.finish();
+
+    let mut dec = c.benchmark_group("minlz_decode");
+    for size in [10 * 1024, 100 * 1024] {
+        dec.throughput(Throughput::Bytes(size as u64));
+        for pattern in ["random", "repeated", "text", "sequential"] {
+            let data = generate_test_data(size, pattern);
+            // Decode benchmarks use Balanced-compressed input.
+            let comp = compress_level(&data, Level::Balanced).unwrap();
+            let id = BenchmarkId::new(pattern, size);
+            dec.bench_with_input(id, &comp, |b, comp| {
+                b.iter(|| decompress(black_box(comp)).unwrap());
+            });
+        }
+    }
+    dec.finish();
+}
+
 criterion_group!(
     benches,
     bench_encode_standard,
@@ -148,5 +188,6 @@ criterion_group!(
     bench_decode,
     bench_roundtrip,
     bench_encoder_reused,
+    bench_minlz,
 );
 criterion_main!(benches);
