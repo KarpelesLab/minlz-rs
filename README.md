@@ -75,6 +75,19 @@ What's implemented in `minlz::minlz`:
 
 MinLZ is an LZ77-style, byte-aligned format in the same family as Snappy/S2, with a different tag scheme (repeat/last-offset copies, fused literal+copy operations, three copy-offset ranges) and an 8 MiB maximum block size. This is an independent implementation of [MinLZ specification v1.0](https://github.com/minio/minlz/blob/main/SPEC.md); the decoder follows the reference decoder, and the encoder's output is verified to decode correctly with the reference. The encoder's exact bytes are implementation-defined and may differ from the reference. The **dictionary** format is unspecified in the MinLZ spec (marked "TBD", with no public reference API), so `Dict` is a crate-local, self-consistent format and is **not** interoperable with `github.com/minio/minlz`.
 
+### MinLZ performance
+
+Benchmarked against the reference Go implementation (which uses hand-written
+amd64 assembly) on an i9-14900K. This crate's decoder uses a pointer-based
+"wildcopy" fast zone and runtime AVX2 dispatch; the encoders drop bounds checks
+in their matching loops and recycle hash tables. On compressible data
+(JSON-like, ratio ~5×) the Rust **decoder is faster than the Go reference**
+(≈ +10%), and compression **ratio beats the reference at every level except
+`Smallest` on prose**. On low-ratio English text the small-token `Fastest` path
+is ~80–90% of the Go assembly. For maximum throughput build with
+`RUSTFLAGS="-C target-cpu=native"`. The decode hot path uses a few well-documented,
+Miri-validated `unsafe` blocks.
+
 ## S2 Format
 
 S2 is an extension of the Snappy compression format that provides:
