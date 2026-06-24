@@ -10,7 +10,7 @@ mod decode;
 mod encode;
 
 pub use decode::{decompress, decompress_into, decompressed_len};
-pub use encode::{compress, compress_level, max_compressed_len};
+pub use encode::{compress, compress_into, compress_level, max_compressed_len};
 
 use crate::error::{Error, Result};
 use alloc::vec::Vec;

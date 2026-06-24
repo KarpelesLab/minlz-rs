@@ -46,20 +46,51 @@ pub fn compress(src: &[u8]) -> Result<Vec<u8>> {
 
 /// Compress `src` into a single MinLZ block at the given [`Level`].
 pub fn compress_level(src: &[u8], level: Level) -> Result<Vec<u8>> {
+    let mut out = Vec::new();
+    compress_into(&mut out, src, level)?;
+    Ok(out)
+}
+
+/// Compress `src` into `out` (cleared first), reusing its capacity. Useful in
+/// hot loops to avoid allocating a fresh output buffer per block.
+pub fn compress_into(out: &mut Vec<u8>, src: &[u8], level: Level) -> Result<()> {
     if src.len() > MAX_BLOCK_SIZE {
         return Err(Error::TooLarge);
     }
+    out.clear();
     if src.is_empty() {
         // Canonical empty block: a single zero indicator byte.
-        return Ok(vec![0u8]);
+        out.push(0);
+        return Ok(());
     }
-    if let Some(body) = compress_body(src, level) {
-        let mut out = Vec::with_capacity(body.len() + 1);
-        out.push(0u8);
-        out.extend_from_slice(&body);
-        return Ok(out);
+    if src.len() >= MIN_NON_LITERAL_BLOCK_SIZE {
+        out.push(0); // indicator
+        let body_start = out.len();
+        append_body(out, src, level);
+        // Keep the compressed block only if it is smaller than its output.
+        if out.len() - body_start - varint_size(src.len() as u64) < src.len() {
+            return Ok(());
+        }
+        out.clear();
     }
-    Ok(store(src))
+    // Stored block: indicator 0x00, length 0, then the raw bytes as literals.
+    out.reserve(src.len() + 2);
+    out.push(0);
+    out.push(0);
+    out.extend_from_slice(src);
+    Ok(())
+}
+
+/// Append `[uvarint(len)][tokens]` for `src` to `out`.
+fn append_body(out: &mut Vec<u8>, src: &[u8], level: Level) {
+    let mut lenbuf = [0u8; 10];
+    let n = encode_varint(&mut lenbuf, src.len() as u64);
+    out.extend_from_slice(&lenbuf[..n]);
+    match level {
+        Level::Fastest => encode_block_greedy(out, src),
+        Level::Balanced => encode_block_better(out, src),
+        Level::Smallest => encode_block_chain(out, src, 64, true),
+    }
 }
 
 /// Produce the *body* of a compressed MinLZ block — `[uvarint(len)][tokens]`,
@@ -73,16 +104,7 @@ pub(crate) fn compress_body(src: &[u8], level: Level) -> Option<Vec<u8>> {
     }
     let header = varint_size(src.len() as u64);
     let mut out = Vec::with_capacity(src.len());
-    let mut lenbuf = [0u8; 10];
-    let n = encode_varint(&mut lenbuf, src.len() as u64);
-    out.extend_from_slice(&lenbuf[..n]);
-    debug_assert_eq!(out.len(), header);
-
-    match level {
-        Level::Fastest => encode_block_greedy(&mut out, src),
-        Level::Balanced => encode_block_better(&mut out, src),
-        Level::Smallest => encode_block_chain(&mut out, src, 64, true),
-    }
+    append_body(&mut out, src, level);
 
     // The decoder requires a compressed block to be no larger than its output.
     if out.len() - header < src.len() {
@@ -90,15 +112,6 @@ pub(crate) fn compress_body(src: &[u8], level: Level) -> Option<Vec<u8>> {
     } else {
         None
     }
-}
-
-/// Encode `src` as a stored (literals-only) block: `0x00 0x00 <literals>`.
-fn store(src: &[u8]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(src.len() + 2);
-    out.push(0);
-    out.push(0);
-    out.extend_from_slice(src);
-    out
 }
 
 #[inline(always)]

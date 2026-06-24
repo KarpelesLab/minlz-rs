@@ -39,7 +39,7 @@ mod block;
 mod index;
 
 pub use block::{
-    compress, compress_level, compress_with_dict, decompress, decompress_into,
+    compress, compress_into, compress_level, compress_with_dict, decompress, decompress_into,
     decompress_with_dict, decompressed_len, max_compressed_len, Dict, Level, MAX_BLOCK_SIZE,
     MAX_DICT_SIZE,
 };
