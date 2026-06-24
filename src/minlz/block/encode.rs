@@ -61,15 +61,6 @@ pub fn compress_level(src: &[u8], level: Level) -> Result<Vec<u8>> {
     Ok(store(src))
 }
 
-/// Hash-chain depth and lazy-matching flag for a level.
-fn params(level: Level) -> (u32, bool) {
-    match level {
-        Level::Fastest => (1, false),
-        Level::Balanced => (8, true),
-        Level::Smallest => (64, true),
-    }
-}
-
 /// Produce the *body* of a compressed MinLZ block — `[uvarint(len)][tokens]`,
 /// without the leading `0x00` indicator — but only if it is smaller than `src`.
 /// Returns `None` when matching does not save space (the caller stores instead).
@@ -86,11 +77,10 @@ pub(crate) fn compress_body(src: &[u8], level: Level) -> Option<Vec<u8>> {
     out.extend_from_slice(&lenbuf[..n]);
     debug_assert_eq!(out.len(), header);
 
-    let (depth, lazy) = params(level);
-    if depth <= 1 {
-        encode_block_greedy(&mut out, src);
-    } else {
-        encode_block_chain(&mut out, src, depth, lazy);
+    match level {
+        Level::Fastest => encode_block_greedy(&mut out, src),
+        Level::Balanced => encode_block_better(&mut out, src),
+        Level::Smallest => encode_block_chain(&mut out, src, 64, true),
     }
 
     // The decoder requires a compressed block to be no larger than its output.
@@ -116,8 +106,25 @@ fn load32(src: &[u8], i: usize) -> u32 {
 }
 
 #[inline(always)]
+fn load64(src: &[u8], i: usize) -> u64 {
+    u64::from_le_bytes(src[i..i + 8].try_into().unwrap())
+}
+
+#[inline(always)]
 fn hash4(v: u32, bits: u32) -> usize {
     (v.wrapping_mul(0x9E37_79B1) >> (32 - bits)) as usize
+}
+
+/// Hash of the lowest 7 bytes of `u` (for the "long" table).
+#[inline(always)]
+fn hash7(u: u64, bits: u32) -> usize {
+    (((u << 8).wrapping_mul(58295818150454627)) >> (64 - bits)) as usize
+}
+
+/// Hash of the lowest 4 bytes of `u` (for the "short" table).
+#[inline(always)]
+fn hash4u(u: u64, bits: u32) -> usize {
+    ((u as u32).wrapping_mul(2654435761) >> (32 - bits)) as usize
 }
 
 /// Hash-table size (log2) chosen from the input length.
@@ -174,13 +181,204 @@ fn encode_block_greedy(out: &mut Vec<u8>, src: &[u8]) {
         // Offset is invariant under the (symmetric) backward extension below.
         let offset = s - cand;
         let (start, len) = extend(src, s, cand, next_emit);
-        emit_literals(out, &src[next_emit..start]);
-        emit_copy(out, offset, len, &mut last_offset);
+        emit_match(out, &src[next_emit..start], offset, len, &mut last_offset);
         s = start + len;
         next_emit = s;
     }
 
     // Trailing literals.
+    if next_emit < n {
+        emit_literals(out, &src[next_emit..n]);
+    }
+}
+
+/// Two-hash-table "better" matcher (ported from the reference `encodeBlockBetter`
+/// approach, emitting MinLZ tokens). A long hash (7 bytes) finds long matches and
+/// a short hash (4 bytes) finds short ones — one lookup each, no chain walking —
+/// and positions inside each match are indexed cheaply ("index in-between").
+fn encode_block_better(out: &mut Vec<u8>, src: &[u8]) {
+    let n = src.len();
+    const L_BITS: u32 = 17;
+    const S_BITS: u32 = 14;
+    let mut l_table = vec![0u32; 1usize << L_BITS];
+    let mut s_table = vec![0u32; 1usize << S_BITS];
+
+    let s_limit = n - 8; // load64 reads 8 bytes at s
+    let mut next_emit = 0usize;
+    let mut last_offset = 1usize; // the "repeat" offset
+    let mut s = 1usize;
+    let mut cv = load64(src, s);
+    let mut next_s;
+
+    'outer: loop {
+        let mut candidate_l;
+        loop {
+            next_s = s + ((s - next_emit) >> 7) + 1;
+            if next_s > s_limit {
+                break 'outer;
+            }
+            let min_src_pos = s as isize - MAX_COPY3_OFFSET as isize + 1;
+            let hash_l = hash7(cv, L_BITS);
+            let hash_s = hash4u(cv, S_BITS);
+            candidate_l = l_table[hash_l] as usize;
+            let candidate_s = s_table[hash_s] as usize;
+            l_table[hash_l] = s as u32;
+            s_table[hash_s] = s as u32;
+            let val_long = load64(src, candidate_l);
+            let val_short = load64(src, candidate_s);
+
+            // Long candidate matches 8 bytes — take it.
+            if candidate_l as isize > min_src_pos && cv == val_long {
+                break;
+            }
+
+            // Repeat (last-offset) check on the 4 bytes at s+1.
+            const REPEAT_MASK: u64 = 0xffff_ffffu64 << 8;
+            if s >= last_offset && cv & REPEAT_MASK == load64(src, s - last_offset) & REPEAT_MASK {
+                let mut base = s + 1;
+                let mut i = base - last_offset;
+                while base > next_emit && i > 0 && src[i - 1] == src[base - 1] {
+                    i -= 1;
+                    base -= 1;
+                }
+                emit_literals(out, &src[next_emit..base]);
+
+                let mut se = s + 5;
+                let mut ce = s - last_offset + 5;
+                while se < n {
+                    if n - se < 8 {
+                        if src[se] == src[ce] {
+                            se += 1;
+                            ce += 1;
+                            continue;
+                        }
+                        break;
+                    }
+                    let diff = load64(src, se) ^ load64(src, ce);
+                    if diff != 0 {
+                        se += (diff.trailing_zeros() >> 3) as usize;
+                        break;
+                    }
+                    se += 8;
+                    ce += 8;
+                }
+                emit_repeat(out, se - base);
+                s = se;
+                next_emit = s;
+                if s >= s_limit {
+                    break 'outer;
+                }
+                // Index the gap between the match ends.
+                let mut index0 = base + 1;
+                let mut index1 = s - 2;
+                while index0 < index1 {
+                    let cv0 = load64(src, index0);
+                    let cv1 = load64(src, index1);
+                    l_table[hash7(cv0, L_BITS)] = index0 as u32;
+                    s_table[hash4u(cv0 >> 8, S_BITS)] = (index0 + 1) as u32;
+                    l_table[hash7(cv1, L_BITS)] = index1 as u32;
+                    s_table[hash4u(cv1 >> 8, S_BITS)] = (index1 + 1) as u32;
+                    index0 += 2;
+                    index1 -= 2;
+                }
+                cv = load64(src, s);
+                continue;
+            }
+
+            // Long candidate matches 4 bytes.
+            if candidate_l as isize >= min_src_pos && cv as u32 == val_long as u32 {
+                break;
+            }
+
+            // Short candidate matches 4 bytes.
+            if candidate_s as isize >= min_src_pos && cv as u32 == val_short as u32 {
+                // Prefer a long candidate one byte ahead, if any.
+                let h = hash7(cv >> 8, L_BITS);
+                candidate_l = l_table[h] as usize;
+                l_table[h] = (s + 1) as u32;
+                if candidate_l as isize > min_src_pos
+                    && (cv >> 8) as u32 == load32(src, candidate_l)
+                {
+                    s += 1;
+                    break;
+                }
+                candidate_l = candidate_s;
+                break;
+            }
+
+            cv = load64(src, next_s);
+            s = next_s;
+        }
+
+        // Extend the match backwards.
+        while candidate_l > 0 && s > next_emit && src[candidate_l - 1] == src[s - 1] {
+            candidate_l -= 1;
+            s -= 1;
+        }
+        let base = s;
+        let offset = base - candidate_l;
+
+        // Extend forwards from the known 4-byte match.
+        let mut se = s + 4;
+        let mut ce = candidate_l + 4;
+        while se < n {
+            if n - se < 8 {
+                if src[se] == src[ce] {
+                    se += 1;
+                    ce += 1;
+                    continue;
+                }
+                break;
+            }
+            let diff = load64(src, se) ^ load64(src, ce);
+            if diff != 0 {
+                se += (diff.trailing_zeros() >> 3) as usize;
+                break;
+            }
+            se += 8;
+            ce += 8;
+        }
+        let length = se - base;
+
+        // A far (copy3) 4-byte match rarely pays for itself; skip it.
+        if offset > MAX_COPY2_OFFSET && length <= 4 && last_offset != offset {
+            s = next_s + 1;
+            if s >= s_limit {
+                break 'outer;
+            }
+            cv = load64(src, s);
+            continue;
+        }
+
+        emit_match(out, &src[next_emit..base], offset, length, &mut last_offset);
+        s = se;
+        next_emit = s;
+        if s >= s_limit {
+            break 'outer;
+        }
+
+        // Index short & long around the match, then sparsely in the middle.
+        let mut index0 = base + 1;
+        let mut index1 = s - 2;
+        let cv0 = load64(src, index0);
+        let cv1 = load64(src, index1);
+        l_table[hash7(cv0, L_BITS)] = index0 as u32;
+        s_table[hash4u(cv0 >> 8, S_BITS)] = (index0 + 1) as u32;
+        l_table[hash7(cv1, L_BITS)] = index1 as u32;
+        s_table[hash4u(cv1 >> 8, S_BITS)] = (index1 + 1) as u32;
+        index0 += 1;
+        index1 -= 1;
+        cv = load64(src, s);
+
+        let mut index2 = (index0 + index1 + 1) >> 1;
+        while index2 < index1 {
+            l_table[hash7(load64(src, index0), L_BITS)] = index0 as u32;
+            l_table[hash7(load64(src, index2), L_BITS)] = index2 as u32;
+            index0 += 2;
+            index2 += 2;
+        }
+    }
+
     if next_emit < n {
         emit_literals(out, &src[next_emit..n]);
     }
@@ -259,8 +457,13 @@ fn encode_block_prefixed(out: &mut Vec<u8>, combined: &[u8], prefix: usize) {
         let cand = cand as usize;
         let offset = s - cand;
         let (start, len) = extend(combined, s, cand, next_emit);
-        emit_literals(out, &combined[next_emit..start]);
-        emit_copy(out, offset, len, &mut last_offset);
+        emit_match(
+            out,
+            &combined[next_emit..start],
+            offset,
+            len,
+            &mut last_offset,
+        );
         s = start + len;
         next_emit = s;
     }
@@ -403,8 +606,7 @@ fn encode_block_chain(out: &mut Vec<u8>, src: &[u8], depth: u32, lazy: bool) {
 
         let offset = s - cand;
         let (start, mlen) = extend(src, s, cand, next_emit);
-        emit_literals(out, &src[next_emit..start]);
-        emit_copy(out, offset, mlen, &mut last_offset);
+        emit_match(out, &src[next_emit..start], offset, mlen, &mut last_offset);
         // Insert positions covered by the match so later matches can find them.
         for p in (s + 1)..(start + mlen).min(s_limit + 1) {
             insert(&mut head, &mut prev, p);
@@ -581,4 +783,88 @@ fn push_extra(out: &mut Vec<u8>, m: usize, count: usize) {
     for i in 0..count {
         out.push((m >> (8 * i)) as u8);
     }
+}
+
+/// Fused Copy2/Copy3 carry up to this many preceding literals.
+const MAX_COPY2_LITS: usize = 4;
+const MAX_COPY3_LITS: usize = 3;
+
+/// Emit `lits` followed by a copy of `length` bytes at `offset`, using a fused
+/// literal+copy token when the literal run is short enough and the offset is in
+/// range (cheaper to decode and one byte smaller). Falls back to separate
+/// literal + copy otherwise.
+fn emit_match(
+    out: &mut Vec<u8>,
+    lits: &[u8],
+    offset: usize,
+    length: usize,
+    last_offset: &mut usize,
+) {
+    if lits.is_empty() {
+        emit_copy(out, offset, length, last_offset);
+        return;
+    }
+    if offset <= MAX_COPY2_OFFSET {
+        if lits.len() > MAX_COPY2_LITS || offset < MIN_COPY2_OFFSET {
+            emit_literals(out, lits);
+            emit_copy(out, offset, length, last_offset);
+        } else {
+            emit_fused_copy2(out, lits, offset, length);
+            *last_offset = offset;
+        }
+    } else if lits.len() > MAX_COPY3_LITS {
+        emit_literals(out, lits);
+        emit_copy(out, offset, length, last_offset);
+    } else {
+        emit_fused_copy3(out, lits, offset, length);
+        *last_offset = offset;
+    }
+}
+
+/// Fused Copy2: 1..4 literals + a 4..11-byte copy at a 16-bit offset (longer
+/// copies continue with a repeat).
+fn emit_fused_copy2(out: &mut Vec<u8>, lits: &[u8], offset: usize, length: usize) {
+    debug_assert!((1..=MAX_COPY2_LITS).contains(&lits.len()));
+    debug_assert!((MIN_COPY2_OFFSET..=MAX_COPY2_OFFSET).contains(&offset));
+    let stored = (offset - MIN_COPY2_OFFSET) as u16;
+    let lit_bits = ((lits.len() - 1) as u8) << 3;
+    let len_raw = length - 4;
+    if len_raw > 7 {
+        out.push(0x03 | (7 << 5) | lit_bits);
+        out.push(stored as u8);
+        out.push((stored >> 8) as u8);
+        out.extend_from_slice(lits);
+        emit_repeat(out, len_raw - 7);
+    } else {
+        out.push(0x03 | ((len_raw as u8) << 5) | lit_bits);
+        out.push(stored as u8);
+        out.push((stored >> 8) as u8);
+        out.extend_from_slice(lits);
+    }
+}
+
+/// Fused Copy3: 1..3 literals + a copy at a 21-bit offset.
+fn emit_fused_copy3(out: &mut Vec<u8>, lits: &[u8], offset: usize, length: usize) {
+    debug_assert!((1..=MAX_COPY3_LITS).contains(&lits.len()));
+    debug_assert!((MIN_COPY3_OFFSET..=MAX_COPY3_OFFSET).contains(&offset));
+    let stored = (offset - MIN_COPY3_OFFSET) as u32;
+    let (lc, extra) = if length <= 64 {
+        ((length - 4) as u32, 0usize)
+    } else {
+        let m = length - 64;
+        if m <= 0xff {
+            (61, 1)
+        } else if m <= 0xffff {
+            (62, 2)
+        } else {
+            (63, 3)
+        }
+    };
+    // val: tag 3, copy3 bit, litLen, length code, offset.
+    let val: u32 = 0x07 | ((lits.len() as u32) << 3) | (lc << 5) | (stored << 11);
+    out.extend_from_slice(&val.to_le_bytes());
+    if extra > 0 {
+        push_extra(out, length - 64, extra);
+    }
+    out.extend_from_slice(lits);
 }
