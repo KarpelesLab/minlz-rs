@@ -47,6 +47,27 @@ unsafe fn u32p(p: *const u8) -> u32 {
     u32::from_le_bytes([*p, *p.add(1), *p.add(2), *p.add(3)])
 }
 
+/// Copy 16 bytes within `dst` from `from` to `to`. SAFETY: the two 16-byte
+/// windows must be disjoint (`from + 16 <= to` or `to + 16 <= from`) and both in
+/// bounds. Compiles to one 16-byte SIMD move.
+#[inline(always)]
+unsafe fn copy16(dp: *mut u8, from: usize, to: usize) {
+    ptr::copy_nonoverlapping(dp.add(from), dp.add(to), 16);
+}
+
+/// Copy 32 bytes within `dst` (one AVX move when compiled with AVX2). SAFETY:
+/// the two 32-byte windows must be disjoint and in bounds.
+#[inline(always)]
+unsafe fn copy32(dp: *mut u8, from: usize, to: usize) {
+    ptr::copy_nonoverlapping(dp.add(from), dp.add(to), 32);
+}
+
+/// Copy 32 bytes from `src` to `dst`. SAFETY: both 32-byte windows in bounds.
+#[inline(always)]
+unsafe fn copy32_in(sp: *const u8, dp: *mut u8, from: usize, to: usize) {
+    ptr::copy_nonoverlapping(sp.add(from), dp.add(to), 32);
+}
+
 /// Shuffle masks for `pshufb`-based small-offset copies: `SHUFFLE[o][i] = i % o`,
 /// so a 16-byte register loaded at the pattern start, shuffled by `SHUFFLE[o]`,
 /// yields 16 bytes of the period-`o` pattern. Indices `1..=15` are valid.
@@ -281,7 +302,29 @@ fn decode_block(dst: &mut [u8], src: &[u8]) -> Result<()> {
 /// Decode a MinLZ token stream into `dst[d_start..]`, with `dst[..d_start]`
 /// pre-filled (a dictionary prefix). Backreferences may reach into the prefix.
 /// On success `d` reaches `dst.len()`.
+///
+/// Dispatches to an AVX2-compiled copy of the hot loop when the CPU supports it
+/// (so the wide copies use modern instructions without a special build), else
+/// the baseline.
 pub(crate) fn decode_block_from(dst: &mut [u8], src: &[u8], d_start: usize) -> Result<()> {
+    #[cfg(all(target_arch = "x86_64", feature = "std"))]
+    {
+        if std::is_x86_feature_detected!("avx2") {
+            // SAFETY: AVX2 is available on this CPU.
+            return unsafe { decode_block_avx2(dst, src, d_start) };
+        }
+    }
+    decode_block_impl(dst, src, d_start)
+}
+
+#[cfg(all(target_arch = "x86_64", feature = "std"))]
+#[target_feature(enable = "avx2,bmi1,bmi2,lzcnt,popcnt,fma")]
+unsafe fn decode_block_avx2(dst: &mut [u8], src: &[u8], d_start: usize) -> Result<()> {
+    decode_block_impl(dst, src, d_start)
+}
+
+#[inline(always)]
+fn decode_block_impl(dst: &mut [u8], src: &[u8], d_start: usize) -> Result<()> {
     let dlen = dst.len();
     let slen = src.len();
     let mut d = d_start;
@@ -290,18 +333,19 @@ pub(crate) fn decode_block_from(dst: &mut [u8], src: &[u8], d_start: usize) -> R
 
     // --- Fast zone: wide, unchecked decoding while margin allows. ---
     // The longest token header is 7 bytes, and short literals/copies are widened
-    // to fixed 16-byte moves, so we require ~20 bytes of input and 16 bytes of
+    // to fixed 32-byte moves, so we require ~36 bytes of input and 32 bytes of
     // output margin. Overwrites past the real length are harmless: positions
     // ahead of `d` are always rewritten before `d` reaches them, and copies only
     // read finalized data behind `d` (the classic "wildcopy" invariant). When
     // the margin runs out we fall through to the fully-checked loop below.
     //
-    // SAFETY: the loop guard `s + 20 < slen && d + 16 < dlen` holds at the top of
+    // SAFETY: the loop guard `s + 36 < slen && d + 32 < dlen` holds at the top of
     // every iteration. Within an iteration all unchecked reads of `src` are at
-    // indices `< s + 20 <= slen`, all unchecked writes to `dst` are at indices
-    // `< d + 16 <= dlen`, and wide copy sources `dst[from..from + 16]` satisfy
-    // `from + 16 <= d < dlen` (only taken when `offset >= 16`). The long-literal
-    // and general-copy paths bounds-check explicitly before writing.
+    // indices `< s + 36 <= slen`, all unchecked writes to `dst` are at indices
+    // `< d + 32 <= dlen`, and wide copy sources `dst[from..from + W]` satisfy
+    // `from + W <= d < dlen` (32-byte path only when `offset >= 32`, 16-byte only
+    // when `offset >= 16`). The long-literal and general-copy paths bounds-check
+    // explicitly before writing.
     let sp = src.as_ptr();
     let dp = dst.as_mut_ptr();
     #[cfg(all(target_arch = "x86_64", feature = "std"))]
@@ -309,7 +353,7 @@ pub(crate) fn decode_block_from(dst: &mut [u8], src: &[u8], d_start: usize) -> R
     #[cfg(not(all(target_arch = "x86_64", feature = "std")))]
     let use_simd = false;
     unsafe {
-        while s + 20 < slen && d + 16 < dlen {
+        while s + 36 < slen && d + 32 < dlen {
             let v = *sp.add(s);
             let length: usize;
             match v & 0x03 {
@@ -333,8 +377,8 @@ pub(crate) fn decode_block_from(dst: &mut [u8], src: &[u8], d_start: usize) -> R
                     };
                     if v & 4 == 0 {
                         // Literals.
-                        if len <= 16 {
-                            ptr::copy_nonoverlapping(sp.add(s), dp.add(d), 16);
+                        if len <= 32 {
+                            copy32_in(sp, dp, s, d);
                         } else if len <= dlen - d && len <= slen - s {
                             ptr::copy_nonoverlapping(sp.add(s), dp.add(d), len);
                         } else {
@@ -420,7 +464,11 @@ pub(crate) fn decode_block_from(dst: &mut [u8], src: &[u8], d_start: usize) -> R
                 return Err(Error::Corrupt);
             }
             let from = d - offset;
-            if length <= 16 {
+            if length <= 32 && offset >= 32 {
+                // Disjoint 32-byte windows: one wide copy (AVX move under AVX2).
+                copy32(dp, from, d);
+                d += length;
+            } else if length <= 16 {
                 if offset >= 16 {
                     // Disjoint 16-byte windows: one wide non-overlapping copy.
                     ptr::copy_nonoverlapping(dp.add(from), dp.add(d), 16);
@@ -431,8 +479,22 @@ pub(crate) fn decode_block_from(dst: &mut [u8], src: &[u8], d_start: usize) -> R
                 d += length;
             } else if length <= dlen - d {
                 if offset >= length {
+                    // Non-overlapping: a single bounded memcpy.
                     ptr::copy_nonoverlapping(dp.add(from), dp.add(d), length);
+                } else if offset >= 16 {
+                    // Overlapping run (RLE), offset >= 16: each 16-byte window is
+                    // disjoint, so sequential 16-byte copies propagate the pattern
+                    // correctly and far faster than byte-by-byte.
+                    let mut k = 0;
+                    while k + 16 <= length {
+                        copy16(dp, from + k, d + k);
+                        k += 16;
+                    }
+                    if k < length {
+                        ptr::copy_nonoverlapping(dp.add(from + k), dp.add(d + k), length - k);
+                    }
                 } else {
+                    // Overlapping run with a tiny offset (< 16): byte by byte.
                     for i in 0..length {
                         *dp.add(d + i) = *dp.add(from + i);
                     }
