@@ -119,9 +119,35 @@ fn load32(src: &[u8], i: usize) -> u32 {
     u32::from_le_bytes([src[i], src[i + 1], src[i + 2], src[i + 3]])
 }
 
+// Unchecked loads / table accesses for the encoder hot loops, where the index
+// is provably in bounds (`s <= n - 8`, hashes `< table.len()`, candidates `< s`).
+//
+// SAFETY: the caller guarantees the accessed bytes/slots exist.
 #[inline(always)]
-fn load64(src: &[u8], i: usize) -> u64 {
-    u64::from_le_bytes(src[i..i + 8].try_into().unwrap())
+unsafe fn load32u(src: &[u8], i: usize) -> u32 {
+    u32::from_le_bytes([
+        *src.get_unchecked(i),
+        *src.get_unchecked(i + 1),
+        *src.get_unchecked(i + 2),
+        *src.get_unchecked(i + 3),
+    ])
+}
+
+#[inline(always)]
+unsafe fn load64u(src: &[u8], i: usize) -> u64 {
+    let mut a = [0u8; 8];
+    core::ptr::copy_nonoverlapping(src.as_ptr().add(i), a.as_mut_ptr(), 8);
+    u64::from_le_bytes(a)
+}
+
+#[inline(always)]
+unsafe fn tget(t: &[u32], i: usize) -> usize {
+    *t.get_unchecked(i) as usize
+}
+
+#[inline(always)]
+unsafe fn tset(t: &mut [u32], i: usize, v: usize) {
+    *t.get_unchecked_mut(i) = v as u32;
 }
 
 #[inline(always)]
@@ -207,117 +233,124 @@ fn encode_block_greedy(out: &mut Vec<u8>, src: &[u8]) {
     let mut next_emit = 0usize;
     let mut last_offset = 1usize; // the "repeat" offset
     let mut s = 1usize;
-    let mut cv = load64(src, s);
 
-    /// Forward-extend a 4-byte match: `s`/`c` point past the matched prefix.
-    #[inline(always)]
-    fn extend_fwd(src: &[u8], n: usize, mut s: usize, mut c: usize) -> usize {
-        while s <= n - 8 {
-            let diff = load64(src, s) ^ load64(src, c);
-            if diff != 0 {
-                return s + (diff.trailing_zeros() >> 3) as usize;
-            }
-            s += 8;
-            c += 8;
-        }
-        s
-    }
-
-    'outer: loop {
-        let mut candidate;
-        loop {
-            let next_s = s + ((s - next_emit) >> 6) + 4;
-            if next_s > s_limit {
-                break 'outer;
-            }
-            let min_src_pos = s as isize - MAX_COPY3_OFFSET as isize;
-            let hash0 = hash6(cv, TABLE_BITS);
-            let hash1 = hash6(cv >> 8, TABLE_BITS);
-            candidate = table[hash0] as usize;
-            let candidate2 = table[hash1] as usize;
-            table[hash0] = s as u32;
-            table[hash1] = (s + 1) as u32;
-            let hash2 = hash6(cv >> 16, TABLE_BITS);
-
-            // Repeat (last-offset) check on the 4 bytes at s+1.
-            if (cv >> 8) as u32 == load32(src, s - last_offset + 1) {
-                let mut base = s + 1;
-                let mut i = base - last_offset;
-                while base > next_emit && i > 0 && src[i - 1] == src[base - 1] {
-                    i -= 1;
-                    base -= 1;
+    // SAFETY (whole loop): `s` stays in `1..=s_limit = n-8`, so 8-byte loads at
+    // `s`/`next_s` are in bounds; candidates are `< s`; hashes are `< table.len()`.
+    unsafe {
+        /// Forward-extend a 4-byte match: `s`/`c` point past the matched prefix.
+        #[inline(always)]
+        unsafe fn extend_fwd(src: &[u8], n: usize, mut s: usize, mut c: usize) -> usize {
+            while s <= n - 8 {
+                let diff = load64u(src, s) ^ load64u(src, c);
+                if diff != 0 {
+                    return s + (diff.trailing_zeros() >> 3) as usize;
                 }
-                emit_literals(out, &src[next_emit..base]);
-                let ce = s - last_offset + 5;
-                s = extend_fwd(src, n, s + 5, ce);
-                emit_repeat(out, s - base);
+                s += 8;
+                c += 8;
+            }
+            s
+        }
+
+        let mut cv = load64u(src, s);
+        'outer: loop {
+            let mut candidate;
+            loop {
+                let next_s = s + ((s - next_emit) >> 6) + 4;
+                if next_s > s_limit {
+                    break 'outer;
+                }
+                let min_src_pos = s as isize - MAX_COPY3_OFFSET as isize;
+                let hash0 = hash6(cv, TABLE_BITS);
+                let hash1 = hash6(cv >> 8, TABLE_BITS);
+                candidate = tget(&table, hash0);
+                let candidate2 = tget(&table, hash1);
+                tset(&mut table, hash0, s);
+                tset(&mut table, hash1, s + 1);
+                let hash2 = hash6(cv >> 16, TABLE_BITS);
+
+                // Repeat (last-offset) check on the 4 bytes at s+1.
+                if (cv >> 8) as u32 == load32u(src, s - last_offset + 1) {
+                    let mut base = s + 1;
+                    let mut i = base - last_offset;
+                    while base > next_emit && i > 0 && src[i - 1] == src[base - 1] {
+                        i -= 1;
+                        base -= 1;
+                    }
+                    emit_literals(out, &src[next_emit..base]);
+                    let ce = s - last_offset + 5;
+                    s = extend_fwd(src, n, s + 5, ce);
+                    emit_repeat(out, s - base);
+                    next_emit = s;
+                    if s >= s_limit {
+                        break 'outer;
+                    }
+                    cv = load64u(src, s);
+                    continue;
+                }
+
+                if candidate as isize >= min_src_pos && cv as u32 == load32u(src, candidate) {
+                    break;
+                }
+                candidate = tget(&table, hash2);
+                if candidate2 as isize >= min_src_pos
+                    && (cv >> 8) as u32 == load32u(src, candidate2)
+                {
+                    tset(&mut table, hash2, s + 2);
+                    candidate = candidate2;
+                    s += 1;
+                    break;
+                }
+                tset(&mut table, hash2, s + 2);
+                if candidate as isize >= min_src_pos && (cv >> 16) as u32 == load32u(src, candidate)
+                {
+                    s += 2;
+                    break;
+                }
+
+                cv = load64u(src, next_s);
+                s = next_s;
+            }
+
+            // Extend backwards, then forwards.
+            while candidate > 0 && s > next_emit && src[candidate - 1] == src[s - 1] {
+                candidate -= 1;
+                s -= 1;
+            }
+            let mut base = s;
+            let mut offset = base - candidate;
+            s = extend_fwd(src, n, s + 4, candidate + 4);
+            emit_match(
+                out,
+                &src[next_emit..base],
+                offset,
+                s - base,
+                &mut last_offset,
+            );
+
+            // Keep emitting copies while the bytes immediately after the match
+            // continue to match a recent position.
+            loop {
                 next_emit = s;
                 if s >= s_limit {
                     break 'outer;
                 }
-                cv = load64(src, s);
-                continue;
+                let x = load64u(src, s - 2);
+                let m2_hash = hash6(x, TABLE_BITS);
+                let curr = (x >> 16) as u32;
+                let curr_hash = hash6(x >> 16, TABLE_BITS);
+                candidate = tget(&table, curr_hash);
+                tset(&mut table, m2_hash, s - 2);
+                tset(&mut table, curr_hash, s);
+                if s - candidate > MAX_COPY3_OFFSET || curr != load32u(src, candidate) {
+                    cv = load64u(src, s + 1);
+                    s += 1;
+                    break;
+                }
+                offset = s - candidate;
+                base = s;
+                s = extend_fwd(src, n, s + 4, candidate + 4);
+                emit_copy(out, offset, s - base, &mut last_offset);
             }
-
-            if candidate as isize >= min_src_pos && cv as u32 == load32(src, candidate) {
-                break;
-            }
-            candidate = table[hash2] as usize;
-            if candidate2 as isize >= min_src_pos && (cv >> 8) as u32 == load32(src, candidate2) {
-                table[hash2] = (s + 2) as u32;
-                candidate = candidate2;
-                s += 1;
-                break;
-            }
-            table[hash2] = (s + 2) as u32;
-            if candidate as isize >= min_src_pos && (cv >> 16) as u32 == load32(src, candidate) {
-                s += 2;
-                break;
-            }
-
-            cv = load64(src, next_s);
-            s = next_s;
-        }
-
-        // Extend backwards, then forwards.
-        while candidate > 0 && s > next_emit && src[candidate - 1] == src[s - 1] {
-            candidate -= 1;
-            s -= 1;
-        }
-        let mut base = s;
-        let mut offset = base - candidate;
-        s = extend_fwd(src, n, s + 4, candidate + 4);
-        emit_match(
-            out,
-            &src[next_emit..base],
-            offset,
-            s - base,
-            &mut last_offset,
-        );
-
-        // Keep emitting copies while the bytes immediately after the match
-        // continue to match a recent position.
-        loop {
-            next_emit = s;
-            if s >= s_limit {
-                break 'outer;
-            }
-            let x = load64(src, s - 2);
-            let m2_hash = hash6(x, TABLE_BITS);
-            let curr = (x >> 16) as u32;
-            let curr_hash = hash6(x >> 16, TABLE_BITS);
-            candidate = table[curr_hash] as usize;
-            table[m2_hash] = (s - 2) as u32;
-            table[curr_hash] = s as u32;
-            if s - candidate > MAX_COPY3_OFFSET || curr != load32(src, candidate) {
-                cv = load64(src, s + 1);
-                s += 1;
-                break;
-            }
-            offset = s - candidate;
-            base = s;
-            s = extend_fwd(src, n, s + 4, candidate + 4);
-            emit_copy(out, offset, s - base, &mut last_offset);
         }
     }
 
@@ -343,175 +376,181 @@ fn encode_block_better(out: &mut Vec<u8>, src: &[u8]) {
     let mut next_emit = 0usize;
     let mut last_offset = 1usize; // the "repeat" offset
     let mut s = 1usize;
-    let mut cv = load64(src, s);
-    let mut next_s;
-
-    'outer: loop {
-        let mut candidate_l;
-        loop {
-            next_s = s + ((s - next_emit) >> 7) + 1;
-            if next_s > s_limit {
-                break 'outer;
-            }
-            let min_src_pos = s as isize - MAX_COPY3_OFFSET as isize + 1;
-            let hash_l = hash7(cv, L_BITS);
-            let hash_s = hash4u(cv, S_BITS);
-            candidate_l = l_table[hash_l] as usize;
-            let candidate_s = s_table[hash_s] as usize;
-            l_table[hash_l] = s as u32;
-            s_table[hash_s] = s as u32;
-            let val_long = load64(src, candidate_l);
-            let val_short = load64(src, candidate_s);
-
-            // Long candidate matches 8 bytes — take it.
-            if candidate_l as isize > min_src_pos && cv == val_long {
-                break;
-            }
-
-            // Repeat (last-offset) check on the 4 bytes at s+1.
-            const REPEAT_MASK: u64 = 0xffff_ffffu64 << 8;
-            if s >= last_offset && cv & REPEAT_MASK == load64(src, s - last_offset) & REPEAT_MASK {
-                let mut base = s + 1;
-                let mut i = base - last_offset;
-                while base > next_emit && i > 0 && src[i - 1] == src[base - 1] {
-                    i -= 1;
-                    base -= 1;
+    // SAFETY (whole loop): `s`/`next_s` stay in `1..=n-8` so 8-byte loads are in
+    // bounds; candidates and index positions are `< s <= n-8`; long/short hashes
+    // are `< l_table.len()` / `< s_table.len()` by construction.
+    unsafe {
+        let mut cv = load64u(src, s);
+        let mut next_s;
+        'outer: loop {
+            let mut candidate_l;
+            loop {
+                next_s = s + ((s - next_emit) >> 7) + 1;
+                if next_s > s_limit {
+                    break 'outer;
                 }
-                emit_literals(out, &src[next_emit..base]);
+                let min_src_pos = s as isize - MAX_COPY3_OFFSET as isize + 1;
+                let hash_l = hash7(cv, L_BITS);
+                let hash_s = hash4u(cv, S_BITS);
+                candidate_l = tget(&l_table, hash_l);
+                let candidate_s = tget(&s_table, hash_s);
+                tset(&mut l_table, hash_l, s);
+                tset(&mut s_table, hash_s, s);
+                let val_long = load64u(src, candidate_l);
+                let val_short = load64u(src, candidate_s);
 
-                let mut se = s + 5;
-                let mut ce = s - last_offset + 5;
-                while se < n {
-                    if n - se < 8 {
-                        if src[se] == src[ce] {
-                            se += 1;
-                            ce += 1;
-                            continue;
+                // Long candidate matches 8 bytes — take it.
+                if candidate_l as isize > min_src_pos && cv == val_long {
+                    break;
+                }
+
+                // Repeat (last-offset) check on the 4 bytes at s+1.
+                const REPEAT_MASK: u64 = 0xffff_ffffu64 << 8;
+                if s >= last_offset
+                    && cv & REPEAT_MASK == load64u(src, s - last_offset) & REPEAT_MASK
+                {
+                    let mut base = s + 1;
+                    let mut i = base - last_offset;
+                    while base > next_emit && i > 0 && src[i - 1] == src[base - 1] {
+                        i -= 1;
+                        base -= 1;
+                    }
+                    emit_literals(out, &src[next_emit..base]);
+
+                    let mut se = s + 5;
+                    let mut ce = s - last_offset + 5;
+                    while se < n {
+                        if n - se < 8 {
+                            if src[se] == src[ce] {
+                                se += 1;
+                                ce += 1;
+                                continue;
+                            }
+                            break;
                         }
-                        break;
+                        let diff = load64u(src, se) ^ load64u(src, ce);
+                        if diff != 0 {
+                            se += (diff.trailing_zeros() >> 3) as usize;
+                            break;
+                        }
+                        se += 8;
+                        ce += 8;
                     }
-                    let diff = load64(src, se) ^ load64(src, ce);
-                    if diff != 0 {
-                        se += (diff.trailing_zeros() >> 3) as usize;
-                        break;
+                    emit_repeat(out, se - base);
+                    s = se;
+                    next_emit = s;
+                    if s >= s_limit {
+                        break 'outer;
                     }
-                    se += 8;
-                    ce += 8;
+                    // Index the gap between the match ends.
+                    let mut index0 = base + 1;
+                    let mut index1 = s - 2;
+                    while index0 < index1 {
+                        let cv0 = load64u(src, index0);
+                        let cv1 = load64u(src, index1);
+                        tset(&mut l_table, hash7(cv0, L_BITS), index0);
+                        tset(&mut s_table, hash4u(cv0 >> 8, S_BITS), index0 + 1);
+                        tset(&mut l_table, hash7(cv1, L_BITS), index1);
+                        tset(&mut s_table, hash4u(cv1 >> 8, S_BITS), index1 + 1);
+                        index0 += 2;
+                        index1 -= 2;
+                    }
+                    cv = load64u(src, s);
+                    continue;
                 }
-                emit_repeat(out, se - base);
-                s = se;
-                next_emit = s;
+
+                // Long candidate matches 4 bytes.
+                if candidate_l as isize >= min_src_pos && cv as u32 == val_long as u32 {
+                    break;
+                }
+
+                // Short candidate matches 4 bytes.
+                if candidate_s as isize >= min_src_pos && cv as u32 == val_short as u32 {
+                    // Prefer a long candidate one byte ahead, if any.
+                    let h = hash7(cv >> 8, L_BITS);
+                    candidate_l = tget(&l_table, h);
+                    tset(&mut l_table, h, s + 1);
+                    if candidate_l as isize > min_src_pos
+                        && (cv >> 8) as u32 == load32u(src, candidate_l)
+                    {
+                        s += 1;
+                        break;
+                    }
+                    candidate_l = candidate_s;
+                    break;
+                }
+
+                cv = load64u(src, next_s);
+                s = next_s;
+            }
+
+            // Extend the match backwards.
+            while candidate_l > 0 && s > next_emit && src[candidate_l - 1] == src[s - 1] {
+                candidate_l -= 1;
+                s -= 1;
+            }
+            let base = s;
+            let offset = base - candidate_l;
+
+            // Extend forwards from the known 4-byte match.
+            let mut se = s + 4;
+            let mut ce = candidate_l + 4;
+            while se < n {
+                if n - se < 8 {
+                    if src[se] == src[ce] {
+                        se += 1;
+                        ce += 1;
+                        continue;
+                    }
+                    break;
+                }
+                let diff = load64u(src, se) ^ load64u(src, ce);
+                if diff != 0 {
+                    se += (diff.trailing_zeros() >> 3) as usize;
+                    break;
+                }
+                se += 8;
+                ce += 8;
+            }
+            let length = se - base;
+
+            // A far (copy3) 4-byte match rarely pays for itself; skip it.
+            if offset > MAX_COPY2_OFFSET && length <= 4 && last_offset != offset {
+                s = next_s + 1;
                 if s >= s_limit {
                     break 'outer;
                 }
-                // Index the gap between the match ends.
-                let mut index0 = base + 1;
-                let mut index1 = s - 2;
-                while index0 < index1 {
-                    let cv0 = load64(src, index0);
-                    let cv1 = load64(src, index1);
-                    l_table[hash7(cv0, L_BITS)] = index0 as u32;
-                    s_table[hash4u(cv0 >> 8, S_BITS)] = (index0 + 1) as u32;
-                    l_table[hash7(cv1, L_BITS)] = index1 as u32;
-                    s_table[hash4u(cv1 >> 8, S_BITS)] = (index1 + 1) as u32;
-                    index0 += 2;
-                    index1 -= 2;
-                }
-                cv = load64(src, s);
+                cv = load64u(src, s);
                 continue;
             }
 
-            // Long candidate matches 4 bytes.
-            if candidate_l as isize >= min_src_pos && cv as u32 == val_long as u32 {
-                break;
-            }
-
-            // Short candidate matches 4 bytes.
-            if candidate_s as isize >= min_src_pos && cv as u32 == val_short as u32 {
-                // Prefer a long candidate one byte ahead, if any.
-                let h = hash7(cv >> 8, L_BITS);
-                candidate_l = l_table[h] as usize;
-                l_table[h] = (s + 1) as u32;
-                if candidate_l as isize > min_src_pos
-                    && (cv >> 8) as u32 == load32(src, candidate_l)
-                {
-                    s += 1;
-                    break;
-                }
-                candidate_l = candidate_s;
-                break;
-            }
-
-            cv = load64(src, next_s);
-            s = next_s;
-        }
-
-        // Extend the match backwards.
-        while candidate_l > 0 && s > next_emit && src[candidate_l - 1] == src[s - 1] {
-            candidate_l -= 1;
-            s -= 1;
-        }
-        let base = s;
-        let offset = base - candidate_l;
-
-        // Extend forwards from the known 4-byte match.
-        let mut se = s + 4;
-        let mut ce = candidate_l + 4;
-        while se < n {
-            if n - se < 8 {
-                if src[se] == src[ce] {
-                    se += 1;
-                    ce += 1;
-                    continue;
-                }
-                break;
-            }
-            let diff = load64(src, se) ^ load64(src, ce);
-            if diff != 0 {
-                se += (diff.trailing_zeros() >> 3) as usize;
-                break;
-            }
-            se += 8;
-            ce += 8;
-        }
-        let length = se - base;
-
-        // A far (copy3) 4-byte match rarely pays for itself; skip it.
-        if offset > MAX_COPY2_OFFSET && length <= 4 && last_offset != offset {
-            s = next_s + 1;
+            emit_match(out, &src[next_emit..base], offset, length, &mut last_offset);
+            s = se;
+            next_emit = s;
             if s >= s_limit {
                 break 'outer;
             }
-            cv = load64(src, s);
-            continue;
-        }
 
-        emit_match(out, &src[next_emit..base], offset, length, &mut last_offset);
-        s = se;
-        next_emit = s;
-        if s >= s_limit {
-            break 'outer;
-        }
+            // Index short & long around the match, then sparsely in the middle.
+            let mut index0 = base + 1;
+            let mut index1 = s - 2;
+            let cv0 = load64u(src, index0);
+            let cv1 = load64u(src, index1);
+            tset(&mut l_table, hash7(cv0, L_BITS), index0);
+            tset(&mut s_table, hash4u(cv0 >> 8, S_BITS), index0 + 1);
+            tset(&mut l_table, hash7(cv1, L_BITS), index1);
+            tset(&mut s_table, hash4u(cv1 >> 8, S_BITS), index1 + 1);
+            index0 += 1;
+            index1 -= 1;
+            cv = load64u(src, s);
 
-        // Index short & long around the match, then sparsely in the middle.
-        let mut index0 = base + 1;
-        let mut index1 = s - 2;
-        let cv0 = load64(src, index0);
-        let cv1 = load64(src, index1);
-        l_table[hash7(cv0, L_BITS)] = index0 as u32;
-        s_table[hash4u(cv0 >> 8, S_BITS)] = (index0 + 1) as u32;
-        l_table[hash7(cv1, L_BITS)] = index1 as u32;
-        s_table[hash4u(cv1 >> 8, S_BITS)] = (index1 + 1) as u32;
-        index0 += 1;
-        index1 -= 1;
-        cv = load64(src, s);
-
-        let mut index2 = (index0 + index1 + 1) >> 1;
-        while index2 < index1 {
-            l_table[hash7(load64(src, index0), L_BITS)] = index0 as u32;
-            l_table[hash7(load64(src, index2), L_BITS)] = index2 as u32;
-            index0 += 2;
-            index2 += 2;
+            let mut index2 = (index0 + index1 + 1) >> 1;
+            while index2 < index1 {
+                tset(&mut l_table, hash7(load64u(src, index0), L_BITS), index0);
+                tset(&mut l_table, hash7(load64u(src, index2), L_BITS), index2);
+                index0 += 2;
+                index2 += 2;
+            }
         }
     }
 
