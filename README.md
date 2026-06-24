@@ -67,7 +67,7 @@ What's implemented in `minlz::minlz`:
 - **Index / seeking** (`std`): `Index::load` + `seek_decompress` for random access into a stream.
 - **Snappy/S2 fallback**: `decompress` transparently decodes S2/Snappy blocks (with the `s2` feature).
 - **Dictionary**: `Dict` + `compress_with_dict` / `decompress_with_dict` (crate-local format — see below).
-- **CLI**: `mzc` / `mzd` in `minlz-tools`.
+- **CLI**: `mzc` / `mzd` (build with the `cli` feature).
 
 MinLZ is an LZ77-style, byte-aligned format in the same family as Snappy/S2, with a different tag scheme (repeat/last-offset copies, fused literal+copy operations, three copy-offset ranges) and an 8 MiB maximum block size. This is an independent implementation of [MinLZ specification v1.0](https://github.com/minio/minlz/blob/main/SPEC.md); the decoder follows the reference decoder, and the encoder's output is verified to decode correctly with the reference. The encoder's exact bytes are implementation-defined and may differ from the reference. The **dictionary** format is unspecified in the MinLZ spec (marked "TBD", with no public reference API), so `Dict` is a crate-local, self-consistent format and is **not** interoperable with `github.com/minio/minlz`.
 
