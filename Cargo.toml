@@ -21,7 +21,7 @@ anyhow = { version = "1", optional = true }
 indicatif = { version = "0.17", optional = true }
 
 [features]
-default = ["std", "s2", "minlz"]
+default = ["std", "s2", "minlz", "asm"]
 # Enables the streaming API (`Reader`, `Writer`, `ConcurrentWriter`) and the
 # `std::io` integration. Disable (`--no-default-features`) for a `no_std` +
 # `alloc` build exposing the block APIs.
@@ -32,6 +32,13 @@ s2 = []
 # The MinLZ codec (github.com/minio/minlz, MinLZ spec v1.0). Exposed under the
 # `minlz` module.
 minlz = []
+# Hand-written x86-64 assembly encoders for the MinLZ Fastest/Balanced levels
+# (ported from the minio/minlz reference). On by default; needs `std` and only
+# takes effect on `x86_64` (a no-op elsewhere). Disable (`--no-default-features`,
+# or omit from a custom feature set) to use the portable scalar matchers, which
+# compress slightly better at the Fastest level (~3-5% smaller) but encode
+# ~6-8% slower. Requires the `minlz` feature to do anything.
+asm = []
 concurrent = ["std", "s2", "rayon"]
 # The command-line tools (s2c/s2d/mzc/mzd). Off by default so library users do
 # not pull in the CLI dependencies. Install with `cargo install minlz --features cli`.

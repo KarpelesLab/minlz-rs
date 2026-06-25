@@ -83,10 +83,19 @@ amd64 assembly) on an i9-14900K. This crate's decoder uses a pointer-based
 in their matching loops and recycle hash tables. On compressible data
 (JSON-like, ratio ~5×) the Rust **decoder is faster than the Go reference**
 (≈ +10%), and compression **ratio beats the reference at every level except
-`Smallest` on prose**. On low-ratio English text the small-token `Fastest` path
-is ~80–90% of the Go assembly. For maximum throughput build with
+`Smallest` on prose**. For maximum throughput build with
 `RUSTFLAGS="-C target-cpu=native"`. The decode hot path uses a few well-documented,
 Miri-validated `unsafe` blocks.
+
+For the `Fastest` and `Balanced` encoders, the default-on **`asm` feature**
+(x86-64 only) uses hand-written assembly ported from the reference encoder, with
+cache-resident hash tables — it **encodes faster than the Go reference** on both
+levels (e.g. text `Fastest` ≈ +14%, others a few percent), at the cost of some
+compression ratio. Disabling it (`--no-default-features` or a custom feature set
+without `asm`) selects the portable scalar matchers, which encode slower but
+compress **better than the reference** at every level. So the feature is a clean
+speed-vs-ratio switch — both directions beat Go, on different axes. On non-x86
+targets the scalar matchers are always used and the feature is a no-op.
 
 ## S2 Format
 
@@ -118,6 +127,7 @@ minlz = "1"
 | `std` | ✅ | Streaming API (`Reader`/`Writer`/`ConcurrentWriter`) and `std::io` integration. Disable for `no_std` + `alloc`. |
 | `s2` | ✅ | The S2 codec (crate root + `s2` module). |
 | `minlz` | ✅ | The MinLZ codec (`minlz` module). |
+| `asm` | ✅ | Hand-written x86-64 assembly for the MinLZ `Fastest`/`Balanced` encoders — encodes **faster than the Go reference**, trading some ratio. Disable for the portable scalar matchers, which encode slower but compress **better than the reference**. No-op off x86-64. |
 | `concurrent` | | Parallel S2 compression with Rayon (implies `std` + `s2`). |
 | `cli` | | Build the `s2c`/`s2d`/`mzc`/`mzd` command-line tools (implies `concurrent` + `minlz`). Off by default so library users don't pull in the CLI dependencies. |
 

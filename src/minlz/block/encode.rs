@@ -184,7 +184,7 @@ std::thread_local! {
 /// page faults on every call; the bytes are still re-initialised each time.
 /// Return it with [`put_table`] when done.
 #[cfg(feature = "std")]
-fn take_table(n: usize, fill: u32) -> Vec<u32> {
+pub(super) fn take_table(n: usize, fill: u32) -> Vec<u32> {
     let mut v = TABLE_POOL
         .with(|p| p.borrow_mut().pop())
         .unwrap_or_default();
@@ -194,7 +194,7 @@ fn take_table(n: usize, fill: u32) -> Vec<u32> {
 }
 
 #[cfg(feature = "std")]
-fn put_table(v: Vec<u32>) {
+pub(super) fn put_table(v: Vec<u32>) {
     TABLE_POOL.with(|p| {
         let mut p = p.borrow_mut();
         if p.len() < 8 {
@@ -204,12 +204,54 @@ fn put_table(v: Vec<u32>) {
 }
 
 #[cfg(not(feature = "std"))]
-fn take_table(n: usize, fill: u32) -> Vec<u32> {
+pub(super) fn take_table(n: usize, fill: u32) -> Vec<u32> {
     alloc::vec![fill; n]
 }
 
 #[cfg(not(feature = "std"))]
-fn put_table(_v: Vec<u32>) {}
+pub(super) fn put_table(_v: Vec<u32>) {}
+
+/// Hash-table size (log2) for the Fastest greedy matcher, chosen by input size
+/// to mirror the reference's per-size asm variants. Keeping the table small for
+/// mid-size, low-locality inputs (text) keeps the random hash probes in cache.
+#[inline(always)]
+fn greedy_table_bits(n: usize) -> u32 {
+    if n > 512 * 1024 {
+        15
+    } else if n > 64 * 1024 {
+        14
+    } else if n > 16 * 1024 {
+        12
+    } else if n > 4 * 1024 {
+        11
+    } else if n > 1024 {
+        9
+    } else {
+        8
+    }
+}
+
+/// Long/short hash-table sizes (log2) for the Balanced "better" matcher, chosen
+/// by input size to mirror the reference's per-size asm variants (long table is
+/// larger; both shrink for mid-size inputs to stay cache-resident).
+#[inline(always)]
+fn better_table_bits(n: usize) -> (u32, u32) {
+    // Unlike the greedy matcher, shrinking the "better" tables for mid-size
+    // inputs costs compression ratio without buying back speed under LLVM
+    // codegen, so the large tables are kept down to 64 KiB; only genuinely small
+    // blocks (e.g. tiny stream chunks) use proportionally smaller tables.
+    if n > 64 * 1024 {
+        (17, 14)
+    } else if n > 16 * 1024 {
+        (14, 12)
+    } else if n > 4 * 1024 {
+        (13, 11)
+    } else if n > 1024 {
+        (11, 9)
+    } else {
+        (10, 8)
+    }
+}
 
 /// Hash-table size (log2) chosen from the input length.
 fn table_bits(n: usize) -> u32 {
@@ -228,6 +270,15 @@ fn table_bits(n: usize) -> u32 {
 // (better instruction selection for the hash multiplies, shifts and trailing
 // zeros), else the baseline.
 fn encode_block_greedy(out: &mut Vec<u8>, src: &[u8]) {
+    // Hand-written assembly matcher (the reference's own instruction schedule)
+    // on x86-64; returns false for inputs it skips (too small / incompressible),
+    // in which case we fall through to the portable matcher below.
+    #[cfg(all(target_arch = "x86_64", feature = "std", feature = "asm"))]
+    {
+        if super::encode_asm::encode_block_greedy_asm(out, src) {
+            return;
+        }
+    }
     #[cfg(all(target_arch = "x86_64", feature = "std"))]
     {
         if std::is_x86_feature_detected!("avx2") {
@@ -247,8 +298,12 @@ unsafe fn encode_block_greedy_avx2(out: &mut Vec<u8>, src: &[u8]) {
 #[inline(always)]
 fn encode_block_greedy_impl(out: &mut Vec<u8>, src: &[u8]) {
     let n = src.len();
-    const TABLE_BITS: u32 = 15;
-    let mut table = take_table(1usize << TABLE_BITS, 0);
+    // Table size mirrors the reference's per-input-size variants: a smaller table
+    // keeps the random-access hash probes in L1/L2 for low-locality inputs (e.g.
+    // text), while large inputs get more slots to reduce collisions. Matching the
+    // reference's breakpoints closes most of the cache-bound encode-speed gap.
+    let table_bits = greedy_table_bits(n);
+    let mut table = take_table(1usize << table_bits, 0);
 
     let s_limit = n - 8; // loads read 8 bytes at s / next_s
     let mut next_emit = 0usize;
@@ -281,13 +336,13 @@ fn encode_block_greedy_impl(out: &mut Vec<u8>, src: &[u8]) {
                     break 'outer;
                 }
                 let min_src_pos = s as isize - MAX_COPY3_OFFSET as isize;
-                let hash0 = hash6(cv, TABLE_BITS);
-                let hash1 = hash6(cv >> 8, TABLE_BITS);
+                let hash0 = hash6(cv, table_bits);
+                let hash1 = hash6(cv >> 8, table_bits);
                 candidate = tget(&table, hash0);
                 let candidate2 = tget(&table, hash1);
                 tset(&mut table, hash0, s);
                 tset(&mut table, hash1, s + 1);
-                let hash2 = hash6(cv >> 16, TABLE_BITS);
+                let hash2 = hash6(cv >> 16, table_bits);
 
                 // Repeat (last-offset) check on the 4 bytes at s+1.
                 if (cv >> 8) as u32 == load32u(src, s - last_offset + 1) {
@@ -356,9 +411,9 @@ fn encode_block_greedy_impl(out: &mut Vec<u8>, src: &[u8]) {
                     break 'outer;
                 }
                 let x = load64u(src, s - 2);
-                let m2_hash = hash6(x, TABLE_BITS);
+                let m2_hash = hash6(x, table_bits);
                 let curr = (x >> 16) as u32;
-                let curr_hash = hash6(x >> 16, TABLE_BITS);
+                let curr_hash = hash6(x >> 16, table_bits);
                 candidate = tget(&table, curr_hash);
                 tset(&mut table, m2_hash, s - 2);
                 tset(&mut table, curr_hash, s);
@@ -387,6 +442,14 @@ fn encode_block_greedy_impl(out: &mut Vec<u8>, src: &[u8]) {
 /// a short hash (4 bytes) finds short ones — one lookup each, no chain walking —
 /// and positions inside each match are indexed cheaply ("index in-between").
 fn encode_block_better(out: &mut Vec<u8>, src: &[u8]) {
+    // Hand-written assembly matcher (the reference's own instruction schedule)
+    // on x86-64; falls through to the portable matcher for inputs it skips.
+    #[cfg(all(target_arch = "x86_64", feature = "std", feature = "asm"))]
+    {
+        if super::encode_asm::encode_block_better_asm(out, src) {
+            return;
+        }
+    }
     #[cfg(all(target_arch = "x86_64", feature = "std"))]
     {
         if std::is_x86_feature_detected!("avx2") {
@@ -406,10 +469,13 @@ unsafe fn encode_block_better_avx2(out: &mut Vec<u8>, src: &[u8]) {
 #[inline(always)]
 fn encode_block_better_impl(out: &mut Vec<u8>, src: &[u8]) {
     let n = src.len();
-    const L_BITS: u32 = 17;
-    const S_BITS: u32 = 14;
-    let mut l_table = take_table(1usize << L_BITS, 0);
-    let mut s_table = take_table(1usize << S_BITS, 0);
+    // Long/short table sizes track the reference's per-input-size "better" asm
+    // variants. The long table is large (8-byte hash, finds long matches); the
+    // short table is smaller. Shrinking both for mid-size inputs keeps the two
+    // random-access probes per position in cache.
+    let (l_bits, s_bits) = better_table_bits(n);
+    let mut l_table = take_table(1usize << l_bits, 0);
+    let mut s_table = take_table(1usize << s_bits, 0);
 
     let s_limit = n - 8; // load64 reads 8 bytes at s
     let mut next_emit = 0usize;
@@ -429,8 +495,8 @@ fn encode_block_better_impl(out: &mut Vec<u8>, src: &[u8]) {
                     break 'outer;
                 }
                 let min_src_pos = s as isize - MAX_COPY3_OFFSET as isize + 1;
-                let hash_l = hash7(cv, L_BITS);
-                let hash_s = hash4u(cv, S_BITS);
+                let hash_l = hash7(cv, l_bits);
+                let hash_s = hash4u(cv, s_bits);
                 candidate_l = tget(&l_table, hash_l);
                 let candidate_s = tget(&s_table, hash_s);
                 tset(&mut l_table, hash_l, s);
@@ -487,10 +553,10 @@ fn encode_block_better_impl(out: &mut Vec<u8>, src: &[u8]) {
                     while index0 < index1 {
                         let cv0 = load64u(src, index0);
                         let cv1 = load64u(src, index1);
-                        tset(&mut l_table, hash7(cv0, L_BITS), index0);
-                        tset(&mut s_table, hash4u(cv0 >> 8, S_BITS), index0 + 1);
-                        tset(&mut l_table, hash7(cv1, L_BITS), index1);
-                        tset(&mut s_table, hash4u(cv1 >> 8, S_BITS), index1 + 1);
+                        tset(&mut l_table, hash7(cv0, l_bits), index0);
+                        tset(&mut s_table, hash4u(cv0 >> 8, s_bits), index0 + 1);
+                        tset(&mut l_table, hash7(cv1, l_bits), index1);
+                        tset(&mut s_table, hash4u(cv1 >> 8, s_bits), index1 + 1);
                         index0 += 2;
                         index1 -= 2;
                     }
@@ -506,7 +572,7 @@ fn encode_block_better_impl(out: &mut Vec<u8>, src: &[u8]) {
                 // Short candidate matches 4 bytes.
                 if candidate_s as isize >= min_src_pos && cv as u32 == val_short as u32 {
                     // Prefer a long candidate one byte ahead, if any.
-                    let h = hash7(cv >> 8, L_BITS);
+                    let h = hash7(cv >> 8, l_bits);
                     candidate_l = tget(&l_table, h);
                     tset(&mut l_table, h, s + 1);
                     if candidate_l as isize > min_src_pos
@@ -575,18 +641,18 @@ fn encode_block_better_impl(out: &mut Vec<u8>, src: &[u8]) {
             let mut index1 = s - 2;
             let cv0 = load64u(src, index0);
             let cv1 = load64u(src, index1);
-            tset(&mut l_table, hash7(cv0, L_BITS), index0);
-            tset(&mut s_table, hash4u(cv0 >> 8, S_BITS), index0 + 1);
-            tset(&mut l_table, hash7(cv1, L_BITS), index1);
-            tset(&mut s_table, hash4u(cv1 >> 8, S_BITS), index1 + 1);
+            tset(&mut l_table, hash7(cv0, l_bits), index0);
+            tset(&mut s_table, hash4u(cv0 >> 8, s_bits), index0 + 1);
+            tset(&mut l_table, hash7(cv1, l_bits), index1);
+            tset(&mut s_table, hash4u(cv1 >> 8, s_bits), index1 + 1);
             index0 += 1;
             index1 -= 1;
             cv = load64u(src, s);
 
             let mut index2 = (index0 + index1 + 1) >> 1;
             while index2 < index1 {
-                tset(&mut l_table, hash7(load64u(src, index0), L_BITS), index0);
-                tset(&mut l_table, hash7(load64u(src, index2), L_BITS), index2);
+                tset(&mut l_table, hash7(load64u(src, index0), l_bits), index0);
+                tset(&mut l_table, hash7(load64u(src, index2), l_bits), index2);
                 index0 += 2;
                 index2 += 2;
             }
@@ -840,6 +906,7 @@ fn encode_block_chain(out: &mut Vec<u8>, src: &[u8], depth: u32, lazy: bool) {
 
 /// Extend a 4-byte match at `(s, cand)` backwards (not past `next_emit`) and
 /// forwards. Returns the match start in `src` and its length.
+#[inline(always)]
 fn extend(src: &[u8], mut s: usize, mut cand: usize, next_emit: usize) -> (usize, usize) {
     let n = src.len();
     while s > next_emit && cand > 0 && src[s - 1] == src[cand - 1] {
@@ -866,16 +933,47 @@ fn extend(src: &[u8], mut s: usize, mut cand: usize, next_emit: usize) -> (usize
 }
 
 /// Emit a run of literals (`lits` may be empty, in which case nothing is done).
+#[inline(always)]
 fn emit_literals(out: &mut Vec<u8>, lits: &[u8]) {
     let n = lits.len();
     if n == 0 {
         return;
     }
     emit_length_tag(out, 0, n);
+    // Short literal runs dominate low-ratio inputs (text). A general
+    // `extend_from_slice` calls into `memcpy` for a runtime length; for `n <= 16`
+    // a single reserve plus two overlapping wide stores (mirroring the
+    // reference's inlined small-copy paths) avoids that call overhead entirely.
+    if n <= 16 {
+        out.reserve(16);
+        // SAFETY: `reserve(16)` guarantees ≥16 bytes of spare capacity past
+        // `len`, so every store below lands within the allocation; `n` source
+        // bytes exist. `set_len` then commits exactly the `n` written bytes.
+        unsafe {
+            let dst = out.as_mut_ptr().add(out.len());
+            let src = lits.as_ptr();
+            if n >= 8 {
+                core::ptr::copy_nonoverlapping(src, dst, 8);
+                core::ptr::copy_nonoverlapping(src.add(n - 8), dst.add(n - 8), 8);
+            } else if n >= 4 {
+                core::ptr::copy_nonoverlapping(src, dst, 4);
+                core::ptr::copy_nonoverlapping(src.add(n - 4), dst.add(n - 4), 4);
+            } else {
+                let mut i = 0;
+                while i < n {
+                    *dst.add(i) = *src.add(i);
+                    i += 1;
+                }
+            }
+            out.set_len(out.len() + n);
+        }
+        return;
+    }
     out.extend_from_slice(lits);
 }
 
 /// Emit a repeat (copy from the last offset) of `length` bytes.
+#[inline(always)]
 fn emit_repeat(out: &mut Vec<u8>, length: usize) {
     // Tag bit 2 set selects repeat.
     emit_length_tag(out, 0b100, length);
@@ -883,6 +981,7 @@ fn emit_repeat(out: &mut Vec<u8>, length: usize) {
 
 /// Emit a tag-0 byte (literal or repeat) carrying `length`, with `flags` ORed
 /// into the low bits. Shared by literals and repeats (identical length codes).
+#[inline(always)]
 fn emit_length_tag(out: &mut Vec<u8>, flags: u8, length: usize) {
     debug_assert!(length >= 1);
     if length <= 29 {
@@ -907,6 +1006,7 @@ fn emit_length_tag(out: &mut Vec<u8>, flags: u8, length: usize) {
 
 /// Emit a copy of `length` bytes at `offset`, choosing the smallest form and
 /// updating `last_offset`.
+#[inline(always)]
 fn emit_copy(out: &mut Vec<u8>, offset: usize, length: usize, last_offset: &mut usize) {
     debug_assert!(length >= 4);
     debug_assert!((1..=MAX_COPY3_OFFSET).contains(&offset));
@@ -930,6 +1030,7 @@ fn emit_copy(out: &mut Vec<u8>, offset: usize, length: usize, last_offset: &mut 
     *last_offset = offset;
 }
 
+#[inline(always)]
 fn emit_copy1(out: &mut Vec<u8>, offset: usize, length: usize) {
     debug_assert!((1..=MAX_COPY1_OFFSET).contains(&offset));
     debug_assert!((4..=MAX_COPY1_LENGTH).contains(&length));
@@ -946,6 +1047,7 @@ fn emit_copy1(out: &mut Vec<u8>, offset: usize, length: usize) {
     }
 }
 
+#[inline(always)]
 fn emit_copy2(out: &mut Vec<u8>, offset: usize, length: usize) {
     debug_assert!((MIN_COPY2_OFFSET..=MAX_COPY2_OFFSET).contains(&offset));
     debug_assert!(length >= 4);
@@ -972,6 +1074,7 @@ fn emit_copy2(out: &mut Vec<u8>, offset: usize, length: usize) {
     }
 }
 
+#[inline(always)]
 fn emit_copy3(out: &mut Vec<u8>, offset: usize, length: usize) {
     debug_assert!((MIN_COPY3_OFFSET..=MAX_COPY3_OFFSET).contains(&offset));
     debug_assert!(length >= 4);
@@ -997,6 +1100,7 @@ fn emit_copy3(out: &mut Vec<u8>, offset: usize, length: usize) {
 }
 
 /// Append the low `count` bytes of `m` in little-endian order.
+#[inline(always)]
 fn push_extra(out: &mut Vec<u8>, m: usize, count: usize) {
     for i in 0..count {
         out.push((m >> (8 * i)) as u8);
@@ -1011,6 +1115,7 @@ const MAX_COPY3_LITS: usize = 3;
 /// literal+copy token when the literal run is short enough and the offset is in
 /// range (cheaper to decode and one byte smaller). Falls back to separate
 /// literal + copy otherwise.
+#[inline(always)]
 fn emit_match(
     out: &mut Vec<u8>,
     lits: &[u8],
@@ -1041,6 +1146,7 @@ fn emit_match(
 
 /// Fused Copy2: 1..4 literals + a 4..11-byte copy at a 16-bit offset (longer
 /// copies continue with a repeat).
+#[inline(always)]
 fn emit_fused_copy2(out: &mut Vec<u8>, lits: &[u8], offset: usize, length: usize) {
     debug_assert!((1..=MAX_COPY2_LITS).contains(&lits.len()));
     debug_assert!((MIN_COPY2_OFFSET..=MAX_COPY2_OFFSET).contains(&offset));
@@ -1062,6 +1168,7 @@ fn emit_fused_copy2(out: &mut Vec<u8>, lits: &[u8], offset: usize, length: usize
 }
 
 /// Fused Copy3: 1..3 literals + a copy at a 21-bit offset.
+#[inline(always)]
 fn emit_fused_copy3(out: &mut Vec<u8>, lits: &[u8], offset: usize, length: usize) {
     debug_assert!((1..=MAX_COPY3_LITS).contains(&lits.len()));
     debug_assert!((MIN_COPY3_OFFSET..=MAX_COPY3_OFFSET).contains(&offset));

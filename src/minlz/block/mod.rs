@@ -8,6 +8,8 @@
 
 mod decode;
 mod encode;
+#[cfg(all(target_arch = "x86_64", feature = "std", feature = "asm"))]
+mod encode_asm;
 
 pub use decode::{decompress, decompress_into, decompressed_len};
 pub use encode::{compress, compress_into, compress_level, max_compressed_len};
