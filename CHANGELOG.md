@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.3](https://github.com/KarpelesLab/minlz-rs/compare/v1.2.2...v1.2.3) - 2026-06-24
+
+### Other
+
+- MinLZ performance summary + target-cpu=native tip
+- Faster MinLZ encode: AVX2/BMI2 multiversioning of the matchers
+- Faster MinLZ decode: AVX2 multiversioning + 32-byte wildcopy
+- Faster MinLZ encode: drop bounds checks in matcher hot loops
+- Add zero-alloc compress_into; share body builder
+- MinLZ perf: recycle encoder tables + SSSE3 small-offset decode
+
 ## [1.2.2](https://github.com/KarpelesLab/minlz-rs/compare/v1.2.1...v1.2.2) - 2026-06-24
 
 ### Other
