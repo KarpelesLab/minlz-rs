@@ -3244,7 +3244,7 @@ minlz_encode_better_asm_512k:
     movq %rcx, 56(%rsp)
     movq 56(%rsp), %rax
     movq 32(%rsp), %rcx
-    movq $0x00000900, %rdx
+    movq $0x00001080, %rdx
     pxor %xmm0, %xmm0
 minlz_encode_better_asm_512k_zero_loop_encodeBetterBlockAsm512K:
     movdqu %xmm0, (%rax)
@@ -3292,14 +3292,14 @@ minlz_encode_better_asm_512k_check_maxskip_cont_encodeBetterBlockAsm512K:
     movq %rdi, %r11
     shlq $0x08, %r10
     imulq %r9, %r10
-    shrq $0x30, %r10
+    shrq $0x2f, %r10
     shlq $0x20, %r11
     imulq %rsi, %r11
     shrq $0x34, %r11
     movl (%rbx,%r10,4), %esi
-    movl 262144(%rbx,%r11,4), %r8d
+    movl 524288(%rbx,%r11,4), %r8d
     movl %eax, (%rbx,%r10,4)
-    movl %eax, 262144(%rbx,%r11,4)
+    movl %eax, 524288(%rbx,%r11,4)
     movq (%rdx,%rsi,1), %r10
     cmpq %rdi, %r10
     je minlz_encode_better_asm_512k_candidate_match_encodeBetterBlockAsm512K
@@ -3587,7 +3587,7 @@ minlz_encode_better_asm_512k_candidateS_match_encodeBetterBlockAsm512K:
     movq %rdi, %r10
     shlq $0x08, %r10
     imulq %r9, %r10
-    shrq $0x30, %r10
+    shrq $0x2f, %r10
     movl (%rbx,%r10,4), %esi
     incl %eax
     movl %eax, (%rbx,%r10,4)
@@ -4251,13 +4251,13 @@ minlz_encode_better_asm_512k_match_nolit_dst_ok_encodeBetterBlockAsm512K:
     movq 1(%rdx,%r9,1), %r13
     shlq $0x08, %r10
     imulq %rdi, %r10
-    shrq $0x30, %r10
+    shrq $0x2f, %r10
     shlq $0x20, %r11
     imulq %r8, %r11
     shrq $0x34, %r11
     shlq $0x08, %r12
     imulq %rdi, %r12
-    shrq $0x30, %r12
+    shrq $0x2f, %r12
     shlq $0x20, %r13
     imulq %r8, %r13
     shrq $0x34, %r13
@@ -4269,8 +4269,8 @@ minlz_encode_better_asm_512k_match_nolit_dst_ok_encodeBetterBlockAsm512K:
     shrq $0x01, %r10
     addq $0x01, %rbx
     subq $0x01, %r9
-    movl %r8d, 262144(%rsi,%r11,4)
-    movl %r14d, 262144(%rsi,%r13,4)
+    movl %r8d, 524288(%rsi,%r11,4)
+    movl %r14d, 524288(%rsi,%r13,4)
 minlz_encode_better_asm_512k_index_loop_encodeBetterBlockAsm512K:
     cmpq %r9, %r10
     jae minlz_encode_better_asm_512k_search_loop_encodeBetterBlockAsm512K
@@ -4278,10 +4278,10 @@ minlz_encode_better_asm_512k_index_loop_encodeBetterBlockAsm512K:
     movq (%rdx,%r10,1), %r11
     shlq $0x08, %r8
     imulq %rdi, %r8
-    shrq $0x30, %r8
+    shrq $0x2f, %r8
     shlq $0x08, %r11
     imulq %rdi, %r11
-    shrq $0x30, %r11
+    shrq $0x2f, %r11
     movl %ebx, (%rsi,%r8,4)
     movl %r9d, (%rsi,%r11,4)
     addq $0x02, %rbx
